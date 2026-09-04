@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import asc
+from sqlalchemy.exc import IntegrityError
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 
 from app.api.deps import AdminUser
@@ -62,7 +63,14 @@ async def create_object(
         sort_order=data.sort_order,
         is_active=data.is_active,
     )
-    await repo.add(obj)
+    try:
+        await repo.add(obj)
+    except IntegrityError:
+        # несуществующая category_id (FK на уровне БД)
+        await repo.session.rollback()
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Invalid category_id"
+        ) from None
     return _to_out(obj)
 
 

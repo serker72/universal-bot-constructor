@@ -1,0 +1,103 @@
+# Тестовый контур: все приложения с тестовой БД и тестовыми очередями RabbitMQ.
+# Инфраструктура (postgres, pgbouncer, redis, rabbitmq) — общая,
+# поднимается отдельно: docker compose -f docker-compose.srv.yml up -d
+#
+# ВАЖНО: запускать с --env-file .env.test, иначе compose интерполирует
+# переменные (${BACKEND_PORT} и т.п.) из корневого .env.
+#
+# Использование:
+#   docker compose --env-file .env.test -f docker-compose.test.yml build                 # сборка тестового образа
+#   docker compose --env-file .env.test -f docker-compose.test.yml run --rm db-update-test   # миграции на тестовую БД
+#   docker compose --env-file .env.test -f docker-compose.test.yml up -d                     # приложения тестового контура
+#   docker compose --env-file .env.test -f docker-compose.test.yml down                      # остановить
+name: universal-bot-constructor-test
+
+services:
+  # --- Миграции на тестовой БД (alembic upgrade head) ---
+  db-update-test:
+    image: ubc-app:latest
+    container_name: ubc-db-update-test
+    command: alembic upgrade head
+    env_file:
+      - .env.test
+    environment:
+      ALEMBIC_DB: test
+    networks:
+      - backend
+
+  # --- Backend (FastAPI + uvicorn), тестовая БД ---
+  # Образ собирается через docker-compose.backend.yml
+  backend-test:
+    image: ubc-app:latest
+    container_name: ubc-backend-test
+    restart: unless-stopped
+    command: >
+      sh -c "uvicorn src.app.api.main:app --host 0.0.0.0 --port ${BACKEND_PORT} ${BACKEND_CONTAINER_COMMAND}"
+    env_file:
+      - .env.test
+    environment:
+      PROJECT_ENVIRONMENT: ${PROJECT_ENVIRONMENT}
+    volumes:
+      - ${BACKEND_PDF_DATA_DIR}:${BACKEND_PDF_DATA_DIR}
+    networks:
+      - backend
+    ports:
+      - "127.0.0.1:${BACKEND_PORT}:${BACKEND_PORT}"
+
+  # --- Bot (aiogram), тестовая БД и тестовые очереди ---
+  bot-test:
+    image: ubc-app:latest
+    container_name: ubc-bot-test
+    restart: unless-stopped
+    command: python -m src.app.bot.main
+    env_file:
+      - .env.test
+    environment:
+      PROJECT_ENVIRONMENT: ${PROJECT_ENVIRONMENT}
+    volumes:
+      - ${BACKEND_PDF_DATA_DIR}:${BACKEND_PDF_DATA_DIR}
+    networks:
+      - backend
+
+  # --- Frontend (Nuxt.js), тестовый backend ---
+  # Образ собирается через docker-compose.frontend.yml
+  frontend-test:
+    image: ubc-frontend:latest
+    container_name: ubc-frontend-test
+    restart: unless-stopped
+    command: node .output/server/index.mjs
+    env_file:
+      - .env.test
+    environment:
+      PROJECT_ENVIRONMENT: ${PROJECT_ENVIRONMENT}
+      NUXT_PUBLIC_BACKEND_URL: ${BACKEND_BASE_URL}${BACKEND_API_PREFIX}
+    networks:
+      - frontend
+    ports:
+      # Nuxt внутри контейнера слушает 3000 (см. frontend/Dockerfile)
+      - "127.0.0.1:3001:3000"
+
+  # --- Test runner: держит контейнер живым для запуска тестов (docker exec) ---
+  # Отдельный тестовый образ: prod-зависимости + dev-зависимости + tests
+  test-runner:
+    build:
+      context: ./app
+      dockerfile: Dockerfile.test
+    image: ubc-app-test:latest
+    container_name: ubc-test-runner
+    env_file:
+      - .env.test
+    environment:
+      PROJECT_ENVIRONMENT: ${PROJECT_ENVIRONMENT}
+    volumes:
+      - ${BACKEND_PDF_DATA_DIR}:${BACKEND_PDF_DATA_DIR}
+    networks:
+      - backend
+
+networks:
+  backend:
+    name: ubc-backend
+    external: true
+  frontend:
+    name: ubc-frontend
+    external: true

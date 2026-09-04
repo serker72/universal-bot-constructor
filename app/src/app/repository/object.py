@@ -45,10 +45,16 @@ class ObjectRepository(BaseRepository[Object]):
 
     async def remove_manager(self, object_id: int, user_id: int) -> None:
         """Снять менеджера с объекта."""
-        link = await self.find_one(
-            ObjectManager.object_id == object_id,
-            ObjectManager.user_id == user_id,
-        )
+        # ВАЖНО: не self.find_one() — он ищет self.model (Object),
+        # а здесь нужна связь ObjectManager
+        link = (
+            await self.session.scalars(
+                select(ObjectManager).where(
+                    ObjectManager.object_id == object_id,
+                    ObjectManager.user_id == user_id,
+                )
+            )
+        ).first()
         if link is not None:
             await self.session.delete(link)
 

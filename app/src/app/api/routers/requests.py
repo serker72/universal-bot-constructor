@@ -115,8 +115,9 @@ async def change_status(
     if data.status == RequestStatus.APPROVED:
         req.confirmed_at = datetime.now(timezone.utc)
     await repo.session.flush()
-    # уведомление посетителю в бот (lazy load связи, telegram_id может отсутствовать)
-    await repo.session.refresh(req, attribute_names=["visitor"])
+    # Перечитать updated_at (истёк после flush из-за server onupdate — иначе
+    # MissingGreenlet при сериализации) и visitor (для уведомления в бот).
+    await repo.session.refresh(req, attribute_names=["updated_at", "visitor"])
     if req.visitor.telegram_id:
         await publisher.publish_request_status_changed(
             RequestStatusChangedEvent(

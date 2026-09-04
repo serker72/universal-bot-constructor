@@ -1,0 +1,41 @@
+# Тестовый образ: prod-зависимости + dev-зависимости (pytest и т.д.) + тесты.
+# Используется сервисом test-runner (docker-compose.test.yml).
+# Сборка: docker build -t ubc-app-test:latest -f app/Dockerfile.test ./app
+FROM python:3.13-slim
+
+# Системные зависимости
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Установка uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+# Копируем исходники, тесты и зависимости, затем ставим пакет (editable):
+# важно скопировать src/ ДО установки — иначе setuptools не найдёт пакет
+COPY pyproject.toml ./
+COPY src/ ./src/
+COPY tests/ ./tests/
+COPY alembic.ini* ./
+COPY alembic/ ./alembic/
+
+# Установка пакета + dev-зависимостей из [tool.uv.dev-dependencies]
+# (uv pip install -e . их не включает, поэтому отдельный uv export)
+RUN uv venv /app/.venv && \
+    uv pip install --python /app/.venv/bin/python -e . && \
+    uv export --no-hashes --format requirements-txt -o /tmp/dev-requirements.txt && \
+    grep -v '^-' /tmp/dev-requirements.txt > /tmp/reqs.txt || true; \
+    if [ -s /tmp/reqs.txt ]; then \
+      uv pip install --python /app/.venv/bin/python -r /tmp/reqs.txt; \
+    fi
+
+# Активируем venv
+ENV PATH="/app/.venv/bin:$PATH"
+ENV PYTHONUNBUFFERED=1
+
+# По умолчанию — ожидание (тесты запускаются через docker exec)
+CMD ["/bin/sh", "-c", "tail -f /dev/null"]

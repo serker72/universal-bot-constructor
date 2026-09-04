@@ -1,4 +1,5 @@
-# Образ для backend (FastAPI) и bot (aiogram) — один образ, разные command
+# Образ для backend (FastAPI) и bot (aiogram) — один образ, разные command.
+# Dev-зависимости (pytest и т.д.) и тесты не включаются — см. Dockerfile.test
 FROM python:3.13-slim
 
 # Системные зависимости
@@ -18,6 +19,7 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY src/ ./src/
 COPY alembic.ini* ./
+COPY alembic/ ./alembic/
 RUN uv venv /app/.venv && \
     uv pip install --python /app/.venv/bin/python -e .
 

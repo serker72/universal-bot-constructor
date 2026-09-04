@@ -35,5 +35,19 @@ dependencies = [
 dev-dependencies = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "httpx>=0.27",
     "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# Один event loop на сессию: интеграционные тесты используют общий
+# движок SQLAlchemy и DI-контейнер приложения (подключения привязаны к loop)
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+markers = [
+    "unit: быстрые тесты без внешних зависимостей (БД, redis, rabbitmq)",
+    "integration: тесты с реальной тестовой БД и redis (нужен docker-контур)",
 ]

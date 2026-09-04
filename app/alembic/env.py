@@ -4,6 +4,7 @@ URL БД и метаданные моделей берутся из прилож
 """
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -17,8 +18,13 @@ from app.domain import Base
 # Конфигурация alembic
 config = context.config
 
-# URL БД из настроек приложения
-config.set_main_option("sqlalchemy.url", settings.postgres.url)
+# URL БД из настроек приложения.
+# ALEMBIC_DB=test — миграции применяются к тестовой БД (settings.postgres.test_url),
+# по умолчанию (ALEMBIC_DB=main или не задана) — к основной БД.
+if os.getenv("ALEMBIC_DB", "main") == "test":
+    config.set_main_option("sqlalchemy.url", settings.postgres.test_url)
+else:
+    config.set_main_option("sqlalchemy.url", settings.postgres.url)
 
 # Логирование
 if config.config_file_name is not None:

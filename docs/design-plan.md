@@ -292,5 +292,19 @@ Unit-тесты (быстрые, без внешних зависимостей)
     (`/api/v1/health`, `/health/ready`) через nginx — ok, login admin с
     httpOnly cookies (2 cookie), авторизованные запросы (categories, users,
     settings), refresh — ok, frontend отдаёт SPA (200, lang="ru"), бот в
-    long-polling с консьюмерами RabbitMQ (structlog: `bot_started_polling`).
-- **Следующий шаг** — шаг 7: тесты (unit + интеграционные).
+    long-polling с консьюмерами RabbitMQ (structlog: `bot_started_polling`);
+  - доработки после запуска: тема Tailwind + `main.css` подключены в
+    `nuxt.config.ts` (`css: [...]`), редирект `/` → `/dashboard`
+    (`routeRules`), поле PDF в форме создания объекта, `FSInputFile` для
+    отправки PDF ботом, `BACKEND_PDF_DATA_DIR` (общий volume backend/bot),
+    `setup_dishka(..., auto_inject=True)`;
+  - уведомления: имена очередей и routing keys вынесены в `.env`
+    (`CONSUMER_QUEUE_*` / `CONSUMER_ROUTING_*`), добавлено событие
+    `bot.notify.request.status` (смена статуса заявки → посетителю);
+    брокер стартует ПОСЛЕ регистрации подписчиков (faststream 0.7).
+- **Шаг 7** — не выполнен (пропущен по решению владельца): тесты
+  (unit + интеграционные, `POSTGRES_TEST_*`).
+- **Шаг 8** — выполнен: итоговый документ проектирования `docs/architecture.md`
+  (архитектура и компоненты, ER-модель, API-контракты, схема callback'ов и
+  уведомлений бота, потоки данных, запуск и эксплуатация, известные
+  особенности).

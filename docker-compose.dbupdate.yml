@@ -1,0 +1,18 @@
+# Обновление схемы БД (alembic upgrade head)
+# Использование: docker compose -f docker-compose.dbupdate.yml run --rm db-update
+name: universal-bot-constructor
+
+include:
+  - docker-compose.srv.yml
+
+services:
+  db-update:
+    image: ubc-app:latest
+    container_name: ubc-db-update
+    command: alembic upgrade head
+    env_file:
+      - .env
+    environment:
+      PROJECT_ENVIRONMENT: ${PROJECT_ENVIRONMENT}
+    networks:
+      - backend

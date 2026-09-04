@@ -1,0 +1,3 @@
+"postgres" "2c64c8bdbadbff914f6e849148b6e1b67bcf7b9b2b76dc9e089d255c02787e1e"
+"universal_bot_constructor" "2c64c8bdbadbff914f6e849148b6e1b67bcf7b9b2b76dc9e089d255c02787e1e"
+"universal_bot_constructor_test" "2c64c8bdbadbff914f6e849148b6e1b67bcf7b9b2b76dc9e089d255c02787e1e"

@@ -1,0 +1,13 @@
+[project]
+name = "universal-bot-constructor"
+version = "0.1.0"
+description = "Universal Bot Constructor — Telegram bot menu constructor"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = ["ubc-app"]
+
+[tool.uv.workspace]
+members = ["app"]
+
+[tool.uv.sources]
+ubc-app = { workspace = true }

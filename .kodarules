@@ -1,0 +1,13 @@
+Размышлять по минимуму.
+Сервисы запускаются с помощью файла `docker-compose.srv.yml`.
+Для запуска приложений `backend, bot` используется виртуальная среда `.venv`.
+
+# Миграции Alembic
+- alembic установлен в корневой `.venv` (не в `app/.venv`), рабочая директория — `app/`
+- пакет `app` не установлен в venv, поэтому требуется `PYTHONPATH=app/src`
+- при локальном запуске переопределять хост: `POSTGRES_HOST=127.0.0.1` (в `.env` указан `pgbouncer`, резолвится только внутри docker-сети)
+- применение миграций (из корня проекта):
+  `PYTHONPATH=app/src POSTGRES_HOST=127.0.0.1 .venv/bin/alembic -c app/alembic.ini upgrade head`
+- создание новой миграции (из каталога `app/`):
+  `PYTHONPATH=../app/src POSTGRES_HOST=127.0.0.1 ../.venv/bin/alembic revision -m "{message}"`
+- альтернатива через docker: `docker compose -f docker-compose.dbupdate.yml run --rm db-update`

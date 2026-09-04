@@ -1,0 +1,8 @@
+# Единый compose-файл: все сервисы и приложения
+# Использование: docker compose up -d
+name: universal-bot-constructor
+
+include:
+  - docker-compose.srv.yml
+  - docker-compose.backend.yml
+  - docker-compose.frontend.yml

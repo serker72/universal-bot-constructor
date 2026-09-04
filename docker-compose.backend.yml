@@ -1,0 +1,45 @@
+# Приложения backend (FastAPI) и bot (aiogram) — один образ app/
+# Использование: docker compose -f docker-compose.backend.yml up -d
+name: universal-bot-constructor
+
+services:
+  # --- Backend (FastAPI + uvicorn) ---
+  backend:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    image: ubc-app:latest
+    container_name: ubc-backend
+    restart: unless-stopped
+    command: >
+      sh -c "uvicorn src.app.api.main:app --host 0.0.0.0 --port ${BACKEND_PORT} ${BACKEND_CONTAINER_COMMAND}"
+    env_file:
+      - .env
+    environment:
+      PROJECT_ENVIRONMENT: ${PROJECT_ENVIRONMENT}
+    volumes:
+      - ${BACKEND_PDF_DATA_DIR}:${BACKEND_PDF_DATA_DIR}
+    networks:
+      - backend
+    ports:
+      - "127.0.0.1:${BACKEND_PORT}:${BACKEND_PORT}"
+
+  # --- Bot (aiogram) ---
+  bot:
+    image: ubc-app:latest
+    container_name: ubc-bot
+    restart: unless-stopped
+    command: python -m src.app.bot.main
+    env_file:
+      - .env
+    environment:
+      PROJECT_ENVIRONMENT: ${PROJECT_ENVIRONMENT}
+    volumes:
+      - ${BACKEND_PDF_DATA_DIR}:${BACKEND_PDF_DATA_DIR}
+    networks:
+      - backend
+
+networks:
+  backend:
+    name: ubc-backend
+    external: true

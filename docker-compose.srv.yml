@@ -1,0 +1,115 @@
+# Инфраструктурные сервисы: nginx, postgresql, pgbouncer, redis, rabbitmq
+# Использование: docker compose -f docker-compose.srv.yml up -d
+name: universal-bot-constructor
+
+services:
+  # --- PostgreSQL ---
+  postgres:
+    image: postgres:16-alpine
+    container_name: ubc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_DB}::${POSTGRES_USER}::${POSTGRES_PASSWORD}|${POSTGRES_TEST_DB}::${POSTGRES_TEST_USER}::${POSTGRES_TEST_PASSWORD}
+    volumes:
+      - ${POSTGRES_DATA_DIR}:/var/lib/postgresql/data
+      - ${POSTGRES_BACKUPS_DIR}:/var/lib/postgresql/backups
+      - ./create-multiple-postgresql-databases.sh:/docker-entrypoint-initdb.d/create-multiple-postgresql-databases.sh
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    # порты не публикуем наружу — только pgbouncer ходит в postgres
+
+  # --- PgBouncer ---
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    container_name: ubc-pgbouncer
+    restart: unless-stopped
+    volumes:
+      - ./srv/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./srv/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT}:${POSTGRES_PORT}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p ${POSTGRES_PORT} -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --- Redis ---
+  redis:
+    image: redis:7-alpine
+    container_name: ubc-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - ${REDIS_DATA_DIR}:/data
+    networks:
+      - backend
+    ports:
+      - "127.0.0.1:${REDIS_PORT}:${REDIS_PORT}"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --- RabbitMQ ---
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: ubc-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+      RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST}
+    volumes:
+      - ${RABBITMQ_DATA_DIR}:/var/lib/rabbitmq
+    networks:
+      - backend
+    ports:
+      - "127.0.0.1:${RABBITMQ_PORT}:${RABBITMQ_PORT}"
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT}:${RABBITMQ_MANAGEMENT_PORT}"
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # --- Nginx ---
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: ubc-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      # - "443:443"   # HTTPS/certbot — позже
+    volumes:
+      - ./srv/nginx/conf:/etc/nginx/conf.d:ro
+      - ./srv/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - backend
+      - frontend
+    # nginx — reverse proxy, стартует независимо от приложений
+
+networks:
+  backend:
+    name: ubc-backend
+  frontend:
+    name: ubc-frontend

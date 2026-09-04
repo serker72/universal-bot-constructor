@@ -1,0 +1,30 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Environment files (секреты)
+.env
+.env.*
+!.env.example
+
+# --- Frontend (Nuxt) ---
+# зависимости
+frontend/node_modules/
+# артефакты сборки Nuxt/Nitro
+frontend/.nuxt/
+frontend/.output/
+.nitro/
+.cache/
+# логи
+*.log
+
+# --- IDE ---
+.idea/
+.vscode/

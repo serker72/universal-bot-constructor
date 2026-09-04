@@ -1,0 +1,28 @@
+# Приложение frontend (Nuxt.js)
+# Использование: docker compose -f docker-compose.frontend.yml up -d
+name: universal-bot-constructor
+
+services:
+  # --- Frontend (Nuxt.js) ---
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ubc-frontend:latest
+    container_name: ubc-frontend
+    restart: unless-stopped
+    command: node .output/server/index.mjs
+    env_file:
+      - .env
+    environment:
+      PROJECT_ENVIRONMENT: ${PROJECT_ENVIRONMENT}
+      NUXT_PUBLIC_BACKEND_URL: ${BACKEND_BASE_URL}${BACKEND_API_PREFIX}
+    networks:
+      - frontend
+    ports:
+      - "127.0.0.1:3000:3000"
+
+networks:
+  frontend:
+    name: ubc-frontend
+    external: true

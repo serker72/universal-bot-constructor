@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Базовые стили админ-панели */
+body {
+  @apply bg-gray-50 text-gray-900 antialiased;
+}
+
+/* ---------- Кнопки ---------- */
+.btn {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-sm font-medium transition
+    focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/50
+    disabled:cursor-not-allowed disabled:opacity-50;
+}
+.btn-primary {
+  @apply btn bg-primary-600 text-white shadow-sm hover:bg-primary-700 active:bg-primary-800;
+}
+.btn-secondary {
+  @apply btn border border-gray-200 bg-white text-gray-700 shadow-sm hover:bg-gray-50 active:bg-gray-100;
+}
+.btn-danger {
+  @apply btn bg-red-600 text-white shadow-sm hover:bg-red-700 active:bg-red-800;
+}
+.btn-ghost {
+  @apply btn text-gray-500 hover:bg-gray-100 hover:text-gray-700;
+}
+
+/* ---------- Формы ---------- */
+.input {
+  @apply w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm
+    placeholder:text-gray-400 transition focus:border-primary-500 focus:outline-none
+    focus:ring-2 focus:ring-primary-500/20;
+}
+.label {
+  @apply mb-1.5 block text-sm font-medium text-gray-700;
+}
+
+/* ---------- Таблицы ---------- */
+.table-base {
+  @apply min-w-full divide-y divide-gray-100;
+}
+.table-base thead th {
+  @apply bg-gray-50 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500;
+}
+.table-base tbody td {
+  @apply px-4 py-3 text-sm text-gray-700;
+}
+.table-base tbody tr {
+  @apply transition hover:bg-primary-50/40;
+}
+
+/* ---------- Карточки и страницы ---------- */
+.card {
+  @apply rounded-xl border border-gray-100 bg-white shadow-card;
+}
+.page-title {
+  @apply text-xl font-semibold tracking-tight text-gray-900 md:text-2xl;
+}
+.page-subtitle {
+  @apply text-sm text-gray-500;
+}
+
+/* ---------- Сайдбар ---------- */
+.sidebar-link {
+  @apply flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-slate-300
+    transition hover:bg-white/10 hover:text-white;
+}
+.sidebar-link-active {
+  @apply bg-primary-500/90 text-white shadow-sm hover:bg-primary-500;
+}

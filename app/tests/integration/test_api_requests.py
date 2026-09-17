@@ -38,6 +38,34 @@ async def test_admin_sees_all_requests(admin_client, request_obj):
     assert item["phone"] == request_obj.phone
 
 
+async def test_request_out_contains_datetime_fields(admin_client, request_obj):
+    """RequestOut отдаёт start/end даты и время."""
+    resp = await admin_client.get(f"{API}/requests/{request_obj.id}")
+    assert resp.status_code == 200
+    item = resp.json()
+    assert item["start_date"] == "2026-10-01"
+    assert item["start_time"] == "14:30:00"
+    assert item["end_date"] == "2026-10-02"
+    assert item["end_time"] == "18:00:00"
+
+
+async def test_request_out_datetime_fields_nullable(admin_client, db, visitor, obj):
+    """Заявка без дат/времени (флаги выключены) — поля null."""
+    from app.domain.models import Request
+
+    req = Request(visitor_id=visitor.id, object_id=obj.id, phone="+79991234567")
+    db.add(req)
+    await db.commit()
+
+    resp = await admin_client.get(f"{API}/requests/{req.id}")
+    assert resp.status_code == 200
+    item = resp.json()
+    assert item["start_date"] is None
+    assert item["start_time"] is None
+    assert item["end_date"] is None
+    assert item["end_time"] is None
+
+
 async def test_manager_without_objects_sees_nothing(manager_client, request_obj):
     resp = await manager_client.get(f"{API}/requests")
     assert resp.status_code == 200

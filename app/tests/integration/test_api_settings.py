@@ -1,6 +1,11 @@
 """Интеграционные тесты API системных настроек (только admin)."""
 
-from app.services.app_settings import KEY_PAGE_SIZE, KEY_WELCOME_TEXT
+from app.services.app_settings import (
+    KEY_IS_USE_END_DATE_IN_REQUEST,
+    KEY_IS_USE_TIME_IN_REQUEST,
+    KEY_PAGE_SIZE,
+    KEY_WELCOME_TEXT,
+)
 from tests.integration.conftest import API
 
 
@@ -52,3 +57,18 @@ async def test_update_unknown_key_400(admin_client):
     )
     assert resp.status_code == 400
     assert "bot.hack" in resp.json()["detail"]
+
+
+async def test_update_request_flags(admin_client):
+    """Флаги заявки сохраняются и читаются."""
+    payload = {
+        KEY_IS_USE_TIME_IN_REQUEST: "true",
+        KEY_IS_USE_END_DATE_IN_REQUEST: "true",
+    }
+    resp = await admin_client.put(f"{API}/settings", json={"settings": payload})
+    assert resp.status_code == 200
+    assert resp.json()["settings"][KEY_IS_USE_TIME_IN_REQUEST] == "true"
+
+    resp = await admin_client.get(f"{API}/settings")
+    assert resp.json()["settings"][KEY_IS_USE_TIME_IN_REQUEST] == "true"
+    assert resp.json()["settings"][KEY_IS_USE_END_DATE_IN_REQUEST] == "true"

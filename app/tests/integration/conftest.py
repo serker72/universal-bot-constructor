@@ -14,7 +14,7 @@
 - rabbitmq не нужен: брокер стартует только в lifespan приложения.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -52,8 +52,15 @@ OBJECT_DATA = {
     "is_active": True,
 }
 VISITOR_DATA = {"telegram_id": 100100100, "full_name": "Иванов Иван Иванович"}
+VISITOR_PHONE = "+79991234567"
 REQUEST_PHONE = "+79991234567"
 REQUEST_COMMENT = "Прошу консультацию"
+REQUEST_DATES = {
+    "start_date": date(2026, 10, 1),
+    "start_time": time(14, 30),
+    "end_date": date(2026, 10, 2),
+    "end_time": time(18, 0),
+}
 PDF_FILENAME = "document.pdf"
 PDF_CONTENT = b"%PDF-1.4 test pdf content"
 
@@ -199,9 +206,10 @@ def visitor_data() -> dict:
 
 @pytest.fixture
 async def visitor(db: AsyncSession) -> Visitor:
-    """Посетитель в БД (согласие дано)."""
+    """Посетитель в БД (согласие дано, телефон в профиле)."""
     v = Visitor(
         **VISITOR_DATA,
+        phone=VISITOR_PHONE,
         consent_given=True,
         consent_at=datetime.now(timezone.utc),
     )
@@ -211,13 +219,22 @@ async def visitor(db: AsyncSession) -> Visitor:
 
 
 @pytest.fixture
-async def request_obj(db: AsyncSession, visitor: Visitor, obj: Object) -> Request:
-    """Новая заявка посетителя на объект."""
+def request_dates() -> dict:
+    """Даты/время заявки (start/end)."""
+    return dict(REQUEST_DATES)
+
+
+@pytest.fixture
+async def request_obj(
+    db: AsyncSession, visitor: Visitor, obj: Object, request_dates: dict
+) -> Request:
+    """Новая заявка посетителя на объект (с датами/временем)."""
     r = Request(
         visitor_id=visitor.id,
         object_id=obj.id,
         phone=REQUEST_PHONE,
         comment=REQUEST_COMMENT,
+        **request_dates,
     )
     db.add(r)
     await db.commit()

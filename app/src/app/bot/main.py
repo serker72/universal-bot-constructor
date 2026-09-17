@@ -14,9 +14,11 @@ import asyncio
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
+from aiogram_dialog import setup_dialogs
 from dishka.integrations.aiogram import setup_dishka
 from faststream.rabbit import RabbitBroker
 
+from app.bot.dialogs.request_dialog import dialog as request_dialog
 from app.bot.handlers import menu, registration, requests
 from app.bot.notifications import register_notification_consumers
 from app.config.settings import Settings
@@ -81,8 +83,12 @@ async def run() -> None:
         dp.include_router(registration.router)
         dp.include_router(menu.router)
         dp.include_router(requests.router)
+        # диалог создания заявки (aiogram-dialog) — после обычных роутеров
+        dp.include_router(request_dialog)
         # auto_inject=True — обернуть хендлеры inject'ом (FromDishka-параметры)
         setup_dishka(container, dp, auto_inject=True)
+        # middleware aiogram-dialog (DialogManager в хендлерах/виджетах)
+        setup_dialogs(dp)
 
         if settings.bot.webhook_base_url:
             await _run_webhook(settings, bot, dp)

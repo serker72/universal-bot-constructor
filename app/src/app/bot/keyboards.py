@@ -97,13 +97,14 @@ def back_to_categories_keyboard():
 
 
 def categories_keyboard(items, page: int, total: int):
-    """Главное меню: список категорий с пагинацией."""
+    """Главное меню: список категорий с пагинацией (1 кнопка в строке)."""
     builder = InlineKeyboardBuilder()
     for cat in items:
         builder.button(
             text=cat.name,
             callback_data=CategoryCB(category_id=cat.id).pack(),
         )
+    builder.adjust(1)
     _add_pager(
         builder,
         page=page,
@@ -118,13 +119,14 @@ def categories_keyboard(items, page: int, total: int):
 
 
 def objects_keyboard(category_id: int, items, page: int, total: int):
-    """Список объектов категории с пагинацией."""
+    """Список объектов категории с пагинацией (1 кнопка в строке)."""
     builder = InlineKeyboardBuilder()
     for obj in items:
         builder.button(
             text=obj.name,
             callback_data=ObjectCB(category_id=category_id, object_id=obj.id).pack(),
         )
+    builder.adjust(1)
     _add_pager(
         builder,
         page=page,
@@ -139,7 +141,7 @@ def objects_keyboard(category_id: int, items, page: int, total: int):
 
 
 def object_keyboard(category_id: int, object_id: int):
-    """Страница объекта: PDF, заявка, назад."""
+    """Страница объекта: PDF, заявка, назад (1 кнопка в строке)."""
     builder = InlineKeyboardBuilder()
     builder.button(
         text="📄 Получить PDF",
@@ -149,6 +151,7 @@ def object_keyboard(category_id: int, object_id: int):
         text="📝 Создать заявку",
         callback_data=CreateRequestCB(object_id=object_id).pack(),
     )
+    builder.adjust(1)
     builder.row(
         types.InlineKeyboardButton(
             text="◀️ К объектам", callback_data=ObjectCB(category_id=category_id).pack()
@@ -169,7 +172,7 @@ def consent_keyboard():
 
 
 def my_requests_keyboard(items, page: int, total: int):
-    """Список моих заявок с пагинацией."""
+    """Список моих заявок с пагинацией (1 кнопка в строке)."""
     builder = InlineKeyboardBuilder()
     for req in items:
         status = req.status.value if hasattr(req.status, "value") else req.status
@@ -177,6 +180,7 @@ def my_requests_keyboard(items, page: int, total: int):
             text=f"{STATUS_EMOJI.get(status, '')} Заявка #{req.id}",
             callback_data=RequestCB(request_id=req.id).pack(),
         )
+    builder.adjust(1)
     _add_pager(
         builder,
         page=page,

@@ -1,10 +1,11 @@
-"""Хендлеры заявок: создание, мои заявки, отмена."""
+"""Хендлеры заявок: создание (диалог), мои заявки, отмена."""
 
 from aiogram import F, Router
-from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery
+from aiogram_dialog import DialogManager
 from dishka.integrations.aiogram import FromDishka
 
+from app.bot.dialogs.request_dialog import FLAG_USE_END_DATE, FLAG_USE_TIME
 from app.bot.keyboards import (
     CreateRequestCB,
     RequestCB,
@@ -14,7 +15,6 @@ from app.bot.keyboards import (
 )
 from app.bot.services import BotService, BotServiceError
 from app.bot.states import RequestStates
-from app.bot.validators import normalize_phone
 
 router = Router(name="requests")
 
@@ -27,17 +27,17 @@ STATUS_TEXT = {
 }
 
 
-# -- создание заявки --------------------------------------------------------
+# -- создание заявки (диалог aiogram-dialog) ---------------------------------
 
 
 @router.callback_query(CreateRequestCB.filter())
 async def start_request(
     callback: CallbackQuery,
     callback_data: CreateRequestCB,
-    state: FSMContext,
+    dialog_manager: DialogManager,
     bot_service: FromDishka[BotService],
 ) -> None:
-    """Кнопка «Создать заявку» на странице объекта."""
+    """Кнопка «Создать заявку»: запуск диалога с флагами из настроек."""
     visitor = await bot_service.get_visitor(callback.from_user.id)
     if visitor is None:
         await callback.answer("Сначала завершите регистрацию (/start)", show_alert=True)
@@ -45,66 +45,15 @@ async def start_request(
     if visitor.is_blocked:
         await callback.answer("Вы заблокированы", show_alert=True)
         return
-    await state.set_state(RequestStates.phone)
-    await state.update_data(object_id=callback_data.object_id)
-    await callback.message.answer(  # type: ignore[union-attr]
-        "Введите ваш номер телефона (например, +79001234567):"
-    )
-    await callback.answer()
-
-
-@router.message(RequestStates.phone, F.text)
-async def process_request_phone(
-    message: Message,
-    state: FSMContext,
-    bot_service: FromDishka[BotService],
-) -> None:
-    """Шаг 1: телефон с контролем формата."""
-    phone = normalize_phone(message.text or "")
-    if phone is None:
-        await message.answer(
-            "Некорректный номер. Введите телефон в формате +79001234567:"
-        )
-        return
-    await state.update_data(phone=phone)
-    await state.set_state(RequestStates.comment)
-    await message.answer(
-        "Добавьте комментарий к заявке (или отправьте «-» чтобы пропустить):"
-    )
-
-
-@router.message(RequestStates.comment, F.text)
-async def process_request_comment(
-    message: Message,
-    state: FSMContext,
-    bot_service: FromDishka[BotService],
-) -> None:
-    """Шаг 2: комментарий (или «-») → создание заявки."""
-    data = await state.get_data()
-    comment = (message.text or "").strip()
-    comment = None if comment in ("-", "") else comment
-    visitor = await bot_service.get_visitor(message.from_user.id)  # type: ignore[union-attr]
-    if visitor is None:
-        await message.answer("Сначала завершите регистрацию (/start).")
-        await state.clear()
-        return
-    try:
-        req = await bot_service.create_request(
-            visitor=visitor,
-            object_id=int(data["object_id"]),
-            phone=data["phone"],
-            comment=comment,
-        )
-    except BotServiceError as exc:
-        await message.answer(
-            f"Ошибка: {exc}", reply_markup=back_to_categories_keyboard()
-        )
-        await state.clear()
-        return
-    await state.clear()
-    await message.answer(
-        f"✅ Заявка #{req.id} создана. Менеджер свяжется с вами.",
-        reply_markup=back_to_categories_keyboard(),
+    use_time = await bot_service.app_settings.get_is_use_time_in_request()
+    use_end_date = await bot_service.app_settings.get_is_use_end_date_in_request()
+    await dialog_manager.start(
+        RequestStates.input_phone,
+        data={
+            "object_id": callback_data.object_id,
+            FLAG_USE_TIME: use_time,
+            FLAG_USE_END_DATE: use_end_date,
+        },
     )
 
 
@@ -186,6 +135,16 @@ async def show_request_details(
         f"Статус: {STATUS_TEXT.get(status, status)}\n"
         f"Телефон: {req.phone}"
     )
+    if req.start_date:
+        start = req.start_date.strftime("%d.%m.%Y")
+        if req.start_time:
+            start += f" {req.start_time.strftime('%H:%M')}"
+        text += f"\nНачало: {start}"
+    if req.end_date:
+        end = req.end_date.strftime("%d.%m.%Y")
+        if req.end_time:
+            end += f" {req.end_time.strftime('%H:%M')}"
+        text += f"\nОкончание: {end}"
     if req.comment:
         text += f"\nКомментарий: {req.comment}"
     can_cancel = await bot_service.can_cancel(req)

@@ -12,8 +12,20 @@ class RegistrationStates(StatesGroup):
 
 
 class RequestStates(StatesGroup):
-    """Создание заявки: телефон → комментарий."""
+    """Создание заявки (диалог aiogram-dialog).
 
-    phone = State()
-    comment = State()
+    Порядок прохождения зависит от флагов настроек
+    is_use_time_in_request / is_use_end_date_in_request:
+    телефон → начальная дата → (время начала) → (дата окончания)
+    → (время окончания) → комментарий.
+    """
+
+    input_phone = State()
+    start_date = State()
+    start_hour = State()
+    start_min = State()
+    end_date = State()
+    end_hour = State()
+    end_min = State()
+    input_comment = State()
 

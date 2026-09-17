@@ -1,7 +1,7 @@
 """Сервис бота: регистрация посетителей, меню, заявки, отмена."""
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,20 +47,28 @@ class BotService:
         """Посетитель по telegram_id."""
         return await self.visitors.get_by_telegram_id(telegram_id)
 
-    async def register_visitor(self, telegram_id: int, full_name: str) -> Visitor:
-        """Завершить регистрацию: согласие уже дано (вызывается после consent)."""
+    async def register_visitor(
+        self, telegram_id: int, full_name: str, phone: str | None = None
+    ) -> Visitor:
+        """Завершить регистрацию: согласие уже дано (вызывается после consent).
+
+        phone — номер, введённый на шаге регистрации (сохраняется в профиле).
+        """
         visitor = await self.visitors.get_by_telegram_id(telegram_id)
         now = datetime.now(timezone.utc)
         if visitor is None:
             visitor = Visitor(
                 telegram_id=telegram_id,
                 full_name=full_name,
+                phone=phone,
                 consent_given=True,
                 consent_at=now,
             )
             await self.visitors.add(visitor)
         else:
             visitor.full_name = full_name
+            if phone is not None:
+                visitor.phone = phone
             visitor.consent_given = True
             visitor.consent_at = now
         await self.session.flush()
@@ -72,6 +80,19 @@ class BotService:
             )
         )
         return visitor
+
+    async def get_profile_phone(self, telegram_id: int) -> str | None:
+        """Сохранённый телефон посетителя (для диалога заявки)."""
+        visitor = await self.visitors.get_by_telegram_id(telegram_id)
+        return visitor.phone if visitor is not None else None
+
+    async def update_visitor_phone(self, telegram_id: int, phone: str) -> None:
+        """Обновить телефон в профиле (при вводе нового номера в диалоге заявки)."""
+        visitor = await self.visitors.get_by_telegram_id(telegram_id)
+        if visitor is None:
+            raise BotServiceError("Посетитель не найден")
+        visitor.phone = phone
+        await self.session.flush()
 
     # -- меню ---------------------------------------------------------------
 
@@ -107,7 +128,16 @@ class BotService:
     # -- заявки -------------------------------------------------------------
 
     async def create_request(
-        self, visitor: Visitor, object_id: int, phone: str, comment: str | None
+        self,
+        visitor: Visitor,
+        object_id: int,
+        phone: str,
+        comment: str | None,
+        *,
+        start_date: date | None = None,
+        start_time: time | None = None,
+        end_date: date | None = None,
+        end_time: time | None = None,
     ) -> Request:
         """Создать заявку (статус «новая») и уведомить менеджеров объекта."""
         obj = await self.get_object(object_id)
@@ -118,6 +148,10 @@ class BotService:
             object_id=object_id,
             phone=phone,
             comment=comment,
+            start_date=start_date,
+            start_time=start_time,
+            end_date=end_date,
+            end_time=end_time,
             status=RequestStatus.NEW,
         )
         await self.requests.add(req)

@@ -23,6 +23,7 @@ dependencies = [
     "faststream[rabbit]>=0.5",
     "dishka>=1.4",
     "aiogram>=3.13",
+    "aiogram-dialog>=2.0",
     "aiohttp>=3.10",
     "aiohttp-socks>=0.9",
     "structlog>=24.4",

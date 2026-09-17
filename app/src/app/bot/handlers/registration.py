@@ -91,6 +91,7 @@ async def process_consent(
     visitor = await bot_service.register_visitor(
         telegram_id=callback.from_user.id,
         full_name=data["full_name"],
+        phone=data.get("phone"),
     )
     await state.clear()
     welcome = await bot_service.app_settings.get_welcome_text()

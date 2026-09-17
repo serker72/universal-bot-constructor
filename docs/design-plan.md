@@ -25,7 +25,7 @@
 - **services**: nginx, postgresql, redis, rabbitmq, pgbouncer
 - **backend**: python, uv, fastapi, faststream, dishka, sqlalchemy (async), alembic (async), asyncpg, repository/services layer
 - **frontend**: nuxt.js, tailwindcss
-- **bot**: python, aiohttp, aiogram
+- **bot**: python, aiohttp, aiogram, aiogram-dialog
 - **containers**: docker, docker compose (единый файл)
 
 ## Запуск
@@ -76,11 +76,11 @@ Compose-файлы разделены по назначению:
 - **objects** — id, category_id (FK), name, short_description (HTML/Markdown), pdf_path, sort_order, is_active, created_at, updated_at
 - **object_managers** — object_id (FK), user_id (FK), связь многие-ко-многим
 - **users** — id, username, password_hash, role (admin/manager), telegram_id (nullable), is_active, created_at, updated_at
-- **visitors** — id, telegram_id (unique), full_name, consent_given (bool), consent_at (timestamp), is_blocked (bool), blocked_at (timestamp), created_at, updated_at
-- **requests** (заявки) — id, visitor_id (FK), object_id (FK), phone (string, контролируется только формат), comment (nullable), status (enum: new/approved/rejected/completed/cancelled_by_customer), created_at, updated_at, confirmed_at (nullable, для расчёта интервала отмены)
+- **visitors** — id, telegram_id (unique), full_name, phone (nullable, сохраняется при регистрации и обновляется в диалоге заявки), consent_given (bool), consent_at (timestamp), is_blocked (bool), blocked_at (timestamp), created_at, updated_at
+- **requests** (заявки) — id, visitor_id (FK), object_id (FK), phone (string, контролируется только формат), comment (nullable), start_date (date, nullable), start_time (time, nullable), end_date (date, nullable), end_time (time, nullable), status (enum: new/approved/rejected/completed/cancelled_by_customer), created_at, updated_at, confirmed_at (nullable, для расчёта интервала отмены)
 - **devices** — id, user_id (FK), device_id (thumbmarkjs), user_agent, created_at, last_seen_at
 - **sessions** — id, device_id (FK), user_id (FK), refresh_token_jti, is_active, created_at, revoked_at
-- **settings** — key, value (размер страницы бота по умолчанию=10, интервал отмены подтверждённой заявки в часах=24, текст согласия, текст приветствия бота)
+- **settings** — key, value (размер страницы бота по умолчанию=10, интервал отмены подтверждённой заявки в часах=24, текст согласия, текст приветствия бота, флаги заявки: is_use_time_in_request=false, is_use_end_date_in_request=false)
 
 ### Шаг 3. Внутренняя архитектура backend
 
@@ -113,7 +113,7 @@ Compose-файлы разделены по назначению:
   - Если заблокирован → сообщение «Вы заблокированы», меню не открывается.
   - Если зарегистрирован → главное меню.
 - **Главное меню**: список категорий (пагинация по N из настроек, по умолчанию 10, кнопки ◀️/▶️ с номером страницы) → список объектов (пагинация) → страница объекта (наименование, краткое описание, кнопка «Получить PDF» → Telegram-документ, кнопка «Создать заявку»).
-- **Создание заявки**: ввод телефона (контроль формата), необязательный комментарий → заявка в статусе «новая» → уведомление менеджеру.
+- **Создание заявки**: диалог aiogram-dialog (телефон → даты/время по флагам → комментарий) → заявка в статусе «новая» → уведомление менеджеру.
 - **Пункт «Мои заявки»**: список заявок посетителя, просмотр статуса, кнопка «Отменить»:
   - Статус «новая» — отмена в любой момент.
   - Статус «подтверждена» — отмена в пределах интервала из настроек (по умолчанию 24ч от подтверждения).
@@ -133,6 +133,8 @@ Compose-файлы разделены по назначению:
 - **/categories** — категории (CRUD, сортировка, активность)
 - **/objects** — объекты (CRUD, сортировка, активность, назначение менеджеров, загрузка PDF)
 - **/requests** — заявки (фильтры по статусу/дате/объекту; менеджер — свои, админ — все; подтверждение/отклонение менеджером)
+- **/requests** — заявки (фильтры по статусу/дате/объекту; менеджер — свои, админ — все; подтверждение/отклонение менеджером)
+- **/users** — пользователи (только admin)
 - **/users** — пользователи (только admin)
 - **/visitors** — посетители (бан/разбан, поиск/фильтр; только admin)
 - **/devices** — устройства (фильтр по пользователю)
@@ -181,6 +183,154 @@ Unit-тесты (быстрые, без внешних зависимостей)
 ### Шаг 8. Итоговый документ проектирования
 
 Зафиксировать в файле проекта: архитектура, ER-модель, API-контракты, потоки данных.
+
+---
+
+## Диалог создания заявки на aiogram-dialog
+
+> Расширение сценария создания заявки (Шаг 5): многооконный диалог с выбором
+> дат и времени, управляемый флагами из таблицы `settings`.
+
+### Новые флаги конфигурации (таблица settings)
+
+- `is_use_time_in_request` (bool, default `false`) — использовать время в запросе;
+- `is_use_end_date_in_request` (bool, default `false`) — использовать дату окончания в запросе.
+- Управление — через frontend `/settings` (admin), чтение в боте через `AppSettingsService`.
+
+### Изменения схемы БД (миграции alembic)
+
+- `visitors`: добавить колонку `phone` (String(32), nullable) — сохраняется при регистрации,
+  обновляется при вводе нового номера в диалоге заявки; используется геттером профиля.
+- `requests`: добавить колонки (все nullable, т.к. зависят от флагов):
+  - `start_date` (Date), `start_time` (Time), `end_date` (Date), `end_time` (Time).
+- Миграции создаются по инструкции из системного промпта (alembic в корневой `.venv`, `PYTHONPATH=app/src`, `POSTGRES_HOST=127.0.0.1`).
+
+### Зависимости
+
+- Добавить пакет `aiogram-dialog` в зависимости `app/pyproject.toml`.
+
+### Виджет RuCalendar
+
+- Штатный `Calendar` из `aiogram-dialog` не переводит названия месяцев и дней недели
+  (официальная документация: «it doesn't translate any dates. If you want localized month
+  or week day names you should provide your own Text widget»).
+- Поэтому реализуется виджет **`RuCalendar`** — подкласс `Calendar` с переопределением
+  `_init_views()`: русские названия месяцев (`header_text=Format(...)` + словарь месяцев),
+  дни недели Пн–Вс, кнопки навигации «◀️/▶️», кнопка «Сегодня».
+- `CalendarConfig(firstweekday=0)` — неделя с понедельника.
+
+### Состояния RequestStates
+
+Заменяются на:
+
+- `input_phone`
+- `start_date`
+- `start_hour`
+- `start_min`
+- `end_date`
+- `end_hour`
+- `end_min`
+- `input_comment`
+
+Порядок прохождения зависит от флагов `is_use_time_in_request` /
+`is_use_end_date_in_request` (см. «Динамический роутинг»).
+
+### Геттер профиля пользователя
+
+- Асинхронный getter окна `input_phone`: запрос к БД через `BotService` —
+  извлечь сохранённый телефон (`visitors.phone`) по `telegram_id`;
+  в `dialog_data` кладётся `profile_phone` (или `None`).
+- Текст окна: «Ваш номер: +7...» (если есть) или приглашение ввести номер.
+
+### Генераторы списков времени
+
+- `generate_hours()` → `[(label "00"…"23", value 0…23)]` — часы 00–23;
+- `generate_minutes(step=5)` → `[(label "00","05",…,55, value 0…55)]` — минуты с шагом 5;
+- используются как `items` для виджетов `Select` в окнах выбора времени.
+
+### Вёрстка окон диалога (6 окон)
+
+1. **Окно 1 (Телефон, `input_phone`)**: текст с текущим номером из профиля (если есть),
+   кнопка «Использовать номер из профиля» (показывается при наличии номера, `when=`),
+   `MessageInput` для перехвата нового номера (текст/контакт) с нормализацией
+   (`normalize_phone`), сохранение в `dialog_data["phone"]`.
+2. **Окна 2 и 4 (Даты, `start_date` / `end_date`)**: интеграция виджета `RuCalendar`
+   для начальной и конечной даты; выбор записывается в `dialog_data["start_date"]` /
+   `dialog_data["end_date"]`.
+3. **Окна 3 и 5 (Время, `start_hour`/`start_min`, `end_hour`/`end_min`)**: `Group`/`Row`
+   с виджетами `Select` (часы 00–23, минуты с шагом 5).
+4. **Окно 6 (Комментарий, `input_comment`)**: `MessageInput` — текст комментария или «-»
+   (пустой/«-» → `comment=None`).
+
+### Проброс флагов через start_data
+
+- При старте диалога флаги читаются из настроек (`AppSettingsService`) и передаются:
+  `dialog_manager.start(RequestStates.input_phone, data={"is_use_time_in_request": ..., "is_use_end_date_in_request": ...})`.
+- В обработчиках флаги извлекаются как `manager.start_data.get("is_use_...")`.
+
+### Динамический роутинг диалога
+
+**Прямая навигация (Forward Routing)** — асинхронные обработчики `on_click` для каждого шага:
+- после телефона → `start_date`;
+- выбор начальной даты (обработчик `on_click` `RuCalendar`) → если `is_use_time_in_request` →
+  `switch_to(start_hour)`, иначе если `is_use_end_date_in_request` → `switch_to(end_date)`,
+  иначе → `input_comment`;
+- минуты начального времени (обработчик `on_click` виджета `Select` минут) — проверка
+  `manager.start_data.get("is_use_end_date_in_request")`:
+  `switch_to(end_date)` либо `input_comment`;
+- конечная дата → `end_hour` (время включено) либо `input_comment`;
+- конечные минуты → `input_comment`.
+
+**Обратная навигация (Backward Routing)** — на этапах с вариативным предыдущим шагом
+статические виджеты `SwitchTo` (кнопки «Назад») заменяются на динамические `Button`
+с кастомными коллбеками:
+- от «Даты окончания» — либо к «Времени начала» (`start_min`), либо к «Дате начала» (`start_date`);
+- от «Минут начального времени» — либо к «Часам начального времени» (`start_hour`),
+  либо к «Дате начала» (`start_date`).
+
+**Сборка итогового объекта (финализация)** — функция агрегации из `dialog_data`:
+телефон, даты, время; валидация бизнес-правил:
+- если заданы обе даты — `end_date >= start_date` (сравнение дат);
+- если заданы дата+время с обеих сторон — сравнение полных `datetime`
+  (`end_dt >= start_dt`); при нарушении — сообщение об ошибке и возврат на шаг.
+- далее — создание заявки через `BotService.create_request(...)`.
+
+### Интеграция и замена старого сценария
+
+- Удалить (или закомментировать) старые хэндлеры сбора данных заявки
+  (`app/src/app/bot/handlers/requests.py`: `start_request`, `process_request_phone`,
+  `process_request_comment` — FSM-версия на `RequestStates.phone/comment`).
+- Зарегистрировать новый `Dialog` в главном роутере бота (`include_router` диалога).
+- Убедиться, что при старте приложения вызывается `setup_dialogs(dp)` (`app/src/app/bot/main.py`).
+- Обновить хэндлер кнопки «Создать заявку» (`CreateRequestCB`): вызов
+  `dialog_manager.start(RequestStates.input_phone, data={...flags...})`.
+- Связь с бизнес-логикой: передавать в `create_request` новые поля
+  (`start_date`, `start_time`, `end_date`, `end_time`).
+- После `manager.done()` — отправка пользователю уведомления об успешном создании заявки.
+
+### Тесты (unit + интеграционные)
+
+Unit-тесты (`app/tests/unit/`):
+
+- `test_app_settings.py` — флаги `is_use_time_in_request` / `is_use_end_date_in_request`:
+  значения по умолчанию (`false`), парсинг `true/1/yes/on/да`, нераспознанное значение → default;
+- `test_time_items.py` — генераторы: часы 00–23 (24 элемента, метки «00»…«23»),
+  минуты с шагом 5 (12 элементов, метки «00»…«55»);
+- `test_ru_calendar.py` — тексты виджета: русские месяцы (`RuMonthText`),
+  дни недели Пн–Вс (`RuWeekdayText`), заголовок «🗓 Сентябрь 2026»
+  (`RuDaysHeaderText`), сборка `RuCalendar` с `CalendarConfig(firstweekday=0)`;
+- `test_request_dialog.py` — логика диалога без запуска Telegram:
+  `validate_request_data` (end_date < start_date → ошибка; равные даты и
+  end_time < start_time → ошибка; корректные данные → None),
+  `collect_request_data` (по флагам: время только при is_use_time, конец только
+  при is_use_end_date, «-» → comment=None).
+
+Интеграционные тесты (`app/tests/integration/`):
+
+- `test_api_settings.py` — новые ключи в PUT/GET настроек;
+- `test_api_requests.py` — `RequestOut` содержит `start_date/start_time/
+  end_date/end_time` (nullable, отдаются в списке/карточке);
+- `conftest.py` — фикстуры: `visitor` с `phone`, `request_obj` с датами/временем.
 
 ---
 
@@ -302,9 +452,48 @@ Unit-тесты (быстрые, без внешних зависимостей)
     (`CONSUMER_QUEUE_*` / `CONSUMER_ROUTING_*`), добавлено событие
     `bot.notify.request.status` (смена статуса заявки → посетителю);
     брокер стартует ПОСЛЕ регистрации подписчиков (faststream 0.7).
-- **Шаг 7** — не выполнен (пропущен по решению владельца): тесты
-  (unit + интеграционные, `POSTGRES_TEST_*`).
+- **Шаг 7** — актуализирован частично: unit + интеграционные тесты существуют
+  и прогоняются в docker (`ubc-test-runner`, 211 passed); тесты диалога
+  заявки (флаги, генераторы времени, RuCalendar, валидация/агрегация)
+  добавлены в рамках доработки «Диалог создания заявки».
 - **Шаг 8** — выполнен: итоговый документ проектирования `docs/architecture.md`
   (архитектура и компоненты, ER-модель, API-контракты, схема callback'ов и
   уведомлений бота, потоки данных, запуск и эксплуатация, известные
   особенности).
+- **Диалог создания заявки (aiogram-dialog)** — выполнен:
+  - флаги `requests.is_use_time_in_request` / `requests.is_use_end_date_in_request`
+    в таблице settings (AppSettingsService + API + frontend `/settings`, чекбоксы);
+  - миграции: `visitors.phone` (nullable) и `requests.start_date/start_time/
+    end_date/end_time` (все nullable); модели SQLAlchemy обновлены;
+  - телефон сохраняется при регистрации (`register_visitor(phone=...)`) и
+    обновляется через `update_visitor_phone`; геттер `get_profile_phone`;
+  - `aiogram-dialog` 2.6.0 добавлен в зависимости;
+  - виджет `RuCalendar` (`bot/widgets/ru_calendar.py`) — подкласс `Calendar`
+    с русскими названиями месяцев/дней недели, неделя с понедельника,
+    min_date=сегодня, max_date=+2 года;
+  - `RequestStates` — 8 состояний (input_phone … input_comment);
+  - генераторы времени (`bot/dialogs/time_items.py`): часы 00–23, минуты
+    с шагом 5;
+  - диалог (`bot/dialogs/request_dialog.py`, 8 окон): телефон (профиль +
+    MessageInput текст/контакт), RuCalendar для дат, Select в ScrollingGroup
+    для часов/минут, комментарий; forward-роутинг по флагам start_data,
+    backward-кнопки на вариативных шагах, валидация (end >= start, полные
+    datetime при равных датах), финализация через `BotService.create_request`;
+  - интеграция: старые FSM-хэндлеры создания заявки удалены, кнопка
+    «Создать заявку» запускает `dialog_manager.start(...)` с флагами,
+    `dp.include_router(request_dialog)` + `setup_dialogs(dp)` в `main.py`;
+  - отображение дат/времени: `RequestOut` (API) дополнен полями
+    `start_date/start_time/end_date/end_time`; frontend `/requests` — колонки
+    «Начало»/«Окончание» (ДД.ММ.ГГГГ ЧЧ:ММ или «—»); карточка заявки в боте
+    («Мои заявки») показывает строки «Начало»/«Окончание»;
+  - тесты (unit + интеграционные, запуск в docker: `ubc-test-runner`):
+    - unit: флаги настроек (default false, парсинг true/1/yes/on/да),
+      генераторы времени (часы 00–23, минуты с шагом 5), тексты `RuCalendar`
+      (месяцы/дни недели/заголовок), валидация и агрегация диалога
+      (`validate_request_data`, `collect_request_data` по флагам);
+    - интеграционные: фикстуры `visitor` (с `phone`) и `request_obj`
+      (с датами/временем); `RequestOut` отдаёт новые поля (значения и null);
+      флаги `is_use_...` в PUT/GET настроек;
+    - прогон: 211 passed (unit + integration) в `ubc-test-runner`;
+  - проверено: все контейнеры (backend, bot, frontend, nginx) подняты,
+    бот в long-polling, health 200.

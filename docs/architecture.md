@@ -95,11 +95,11 @@ settings (key/value, отдельная таблица)
 | **categories** | id, name, sort_order, is_active | уровень 1 меню |
 | **objects** | id, category_id FK, name, short_description, pdf_path, sort_order, is_active | уровень 2 меню; pdf_path — относительный путь в PDF-каталоге |
 | **object_managers** | object_id FK, user_id FK, PK(object_id, user_id) | какие менеджеры обслуживают объект |
-| **visitors** | id, telegram_id (unique), full_name, consent_given, consent_at, is_blocked, blocked_at | посетители бота |
-| **requests** | id, visitor_id FK, object_id FK, phone, comment (nullable), status (enum), confirmed_at (nullable) | заявки; статусы: `new → approved → completed`, `new → rejected`, `new/approved → cancelled_by_customer` |
+| **visitors** | id, telegram_id (unique), full_name, phone (nullable), consent_given, consent_at, is_blocked, blocked_at | посетители бота; phone — телефон из профиля (для диалога заявки) |
+| **requests** | id, visitor_id FK, object_id FK, phone, comment (nullable), start_date/start_time/end_date/end_time (nullable), status (enum), confirmed_at (nullable) | заявки; статусы: `new → approved → completed`, `new → rejected`, `new/approved → cancelled_by_customer`; даты/время — опциональны, зависят от флагов настроек |
 | **devices** | id, user_id FK, device_id (thumbmarkjs), user_agent, last_seen_at | устройства входа |
 | **sessions** | id, device_id FK, user_id FK, refresh_token_jti, is_active, revoked_at | refresh-сессии (ротация, отзыв) |
-| **settings** | key (PK), value | page_size (10), cancel_interval_hours (24), welcome_text, consent_text |
+| **settings** | key (PK), value | page_size (10), cancel_interval_hours (24), welcome_text, consent_text, is_use_time_in_request (false), is_use_end_date_in_request (false) |
 
 Миграции: `app/alembic/versions/` (9 миграций, async-движок). Запуск — см. §7.
 
@@ -145,8 +145,16 @@ settings (key/value, отдельная таблица)
   зарегистрированный → главное меню.
 - **Меню**: категории (пагинация page_size из settings) → объекты → карточка
   объекта (описание, «Получить PDF» → документ Telegram, «Создать заявку»).
-- **Заявка**: телефон → необязательный комментарий → статус `new` →
-  уведомление менеджерам объекта.
+- **Заявка (диалог aiogram-dialog)**: телефон (из профиля `visitors.phone`
+  или новый: текст/контакт) → начальная дата (`RuCalendar` — русские месяцы/
+  дни недели, неделя с Пн) → часы/минуты начала (Select, минуты с шагом 5;
+  только при `is_use_time_in_request`) → дата окончания → время окончания
+  (только при `is_use_end_date_in_request`) → необязательный комментарий
+  («-» → пусто) → валидация (`end >= start`, при равных датах — полные
+  datetime) → статус `new` → уведомление менеджерам объекта.
+  Роутинг шагов динамический: флаги передаются в `start_data` при
+  `dialog_manager.start(...)`; кнопки «Назад» на вариативных шагах —
+  динамические `Button`. `setup_dialogs(dp)` вызывается в `bot/main.py`.
 - **Мои заявки**: список с пагинацией, статусы, отмена: `new` — всегда,
   `approved` — в пределах `cancel_interval_hours` от `confirmed_at`.
 - FSM хранится в Redis (`RedisStorage`, key builder с bot_id и destiny).
@@ -209,7 +217,10 @@ admin → PUT /objects/{id}/pdf (multipart) → PdfService: валидация (
 
 ### Заявка (полный цикл)
 ```
-посетитель: бот «Создать заявку» → телефон+комментарий → requests (new)
+посетитель: бот «Создать заявку» → диалог aiogram-dialog
+        (телефон из профиля/новый → даты RuCalendar → время Select
+        → комментарий; шаги зависят от флагов settings)
+        → requests (new, phone, comment, start/end date/time)
         → publish bot.notify.request.created → менеджерам объекта
 менеджер:  frontend POST /requests/{id}/status (approved/rejected/completed)
         → БД → publish bot.notify.request.status → посетителю
@@ -267,3 +278,25 @@ structlog: console (dev) / JSON (prod), уровень — по `PROJECT_ENVIRON
   что и админка (иначе httpOnly cookies не отправятся);
 - `crypto.subtle` (thumbmarkjs) недоступен вне secure context — есть фолбэк
   FNV-1a-хеш для HTTP-разработки.
+
+### Тесты
+
+Запуск в docker (test-runner, тестовый контур `docker-compose.test.yml`):
+
+```bash
+docker compose --env-file .env.test -f docker-compose.test.yml build test-runner
+docker compose --env-file .env.test -f docker-compose.test.yml up -d test-runner
+docker compose --env-file .env.test -f docker-compose.test.yml run --rm db-update-test
+docker exec ubc-test-runner /app/.venv/bin/python -m pytest tests -q
+```
+
+- **unit** (`app/tests/unit/`): валидаторы, схемы, настройки (включая флаги
+  `is_use_time_in_request` / `is_use_end_date_in_request`), токены, PDF,
+  генераторы времени (часы 00–23, минуты с шагом 5), тексты `RuCalendar`,
+  валидация/агрегация диалога заявки;
+- **integration** (`app/tests/integration/`): репозитории и API на реальной
+  тестовой БД (auth, categories/objects/users/visitors/requests/settings,
+  PDF, sessions/devices); фикстуры `visitor` (с `phone`), `request_obj`
+  (с `start/end` датами/временем); TRUNCATE всех таблиц и flushdb redis
+  после каждого теста;
+- текущий прогон: **211 passed**.

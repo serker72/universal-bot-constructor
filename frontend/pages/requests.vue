@@ -42,6 +42,8 @@
             <th class="w-20">№</th>
             <th>Объект</th>
             <th>Телефон</th>
+            <th>Начало</th>
+            <th>Окончание</th>
             <th>Комментарий</th>
             <th>Статус</th>
             <th>Создана</th>
@@ -53,6 +55,8 @@
             <td>#{{ req.id }}</td>
             <td>{{ objectName(req.object_id) }}</td>
             <td class="whitespace-nowrap">{{ req.phone }}</td>
+            <td class="whitespace-nowrap">{{ formatStart(req) }}</td>
+            <td class="whitespace-nowrap">{{ formatEnd(req) }}</td>
             <td class="max-w-56 truncate" :title="req.comment ?? ''">{{ req.comment || '—' }}</td>
             <td><StatusBadge :status="req.status" /></td>
             <td class="whitespace-nowrap">{{ formatDateTime(req.created_at) }}</td>
@@ -72,7 +76,7 @@
             </td>
           </tr>
           <tr v-if="!items.length">
-            <td colspan="7" class="py-6 text-center text-gray-400">Заявок нет</td>
+            <td colspan="9" class="py-6 text-center text-gray-400">Заявок нет</td>
           </tr>
         </tbody>
       </table>
@@ -90,6 +94,10 @@ interface Req {
   object_id: number
   phone: string
   comment: string | null
+  start_date: string | null
+  start_time: string | null
+  end_date: string | null
+  end_time: string | null
   status: string
   confirmed_at: string | null
   created_at: string
@@ -112,6 +120,21 @@ const filters = ref({ status: '', objectId: '', dateFrom: '', dateTo: '' })
 
 function objectName(id: number): string {
   return objects.value.find((o) => o.id === id)?.name ?? `#${id}`
+}
+
+/** Дата + время из заявки в формате ДД.ММ.ГГГГ ЧЧ:ММ (или «—») */
+function formatPeriod(d: string | null, t: string | null): string {
+  if (!d) return '—'
+  const date = d.slice(0, 10).split('-').reverse().join('.')
+  return t ? `${date} ${t.slice(0, 5)}` : date
+}
+
+function formatStart(req: Req): string {
+  return formatPeriod(req.start_date, req.start_time)
+}
+
+function formatEnd(req: Req): string {
+  return formatPeriod(req.end_date, req.end_time)
 }
 
 /** Обработка доступна только менеджеру объекта: new → approved/rejected, approved → completed */

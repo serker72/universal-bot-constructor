@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime
+from sqlalchemy import BigInteger, Boolean, DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.base import Base, TimestampMixin
@@ -18,6 +18,7 @@ class Visitor(Base, TimestampMixin):
         BigInteger, unique=True, nullable=False
     )
     full_name: Mapped[str] = mapped_column(nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     consent_given: Mapped[bool] = mapped_column(default=False, nullable=False)
     consent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

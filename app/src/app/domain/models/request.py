@@ -1,9 +1,9 @@
 """Заявки посетителей на объекты."""
 
 import enum
-from datetime import datetime
+from datetime import date, datetime, time
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import Date, DateTime, Enum, ForeignKey, String, Text, Time
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.base import Base, TimestampMixin
@@ -37,6 +37,10 @@ class Request(Base, TimestampMixin):
     )
     phone: Mapped[str] = mapped_column(String(32), nullable=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     status: Mapped[RequestStatus] = mapped_column(
         Enum(RequestStatus, name="tp_request_status"),
         nullable=False,

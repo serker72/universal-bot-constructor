@@ -1,6 +1,6 @@
 """Схемы заявок."""
 
-from datetime import datetime
+from datetime import date, datetime, time
 
 from pydantic import BaseModel, ConfigDict
 
@@ -17,6 +17,10 @@ class RequestOut(BaseModel):
     object_id: int
     phone: str
     comment: str | None
+    start_date: date | None
+    start_time: time | None
+    end_date: date | None
+    end_time: time | None
     status: RequestStatus
     confirmed_at: datetime | None
     created_at: datetime

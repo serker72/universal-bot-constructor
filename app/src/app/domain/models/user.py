@@ -37,3 +37,7 @@ class User(Base, TimestampMixin):
         secondary="object_managers",
         back_populates="managers",
     )
+    managed_categories: Mapped[list["Category"]] = relationship(
+        secondary="category_managers",
+        back_populates="managers",
+    )

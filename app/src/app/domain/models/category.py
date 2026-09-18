@@ -19,3 +19,7 @@ class Category(Base, TimestampMixin):
         back_populates="category",
         cascade="all, delete-orphan",
     )
+    managers: Mapped[list["User"]] = relationship(
+        secondary="category_managers",
+        back_populates="managed_categories",
+    )

@@ -24,3 +24,16 @@ class CategoryOut(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+class CategoryManagersIn(BaseModel):
+    """Замена списка менеджеров категории."""
+
+    user_ids: list[int]
+
+
+class CategoryManagersOut(BaseModel):
+    """Список id менеджеров категории."""
+
+    category_id: int
+    user_ids: list[int]

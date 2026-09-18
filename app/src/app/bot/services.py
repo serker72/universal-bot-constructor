@@ -155,7 +155,8 @@ class BotService:
             status=RequestStatus.NEW,
         )
         await self.requests.add(req)
-        manager_ids = await self.objects.list_manager_ids(object_id)
+        # менеджеры объекта напрямую + менеджеры категории объекта
+        manager_ids = await self.objects.list_access_manager_ids(object_id)
         await self.publisher.publish_request_created(
             RequestCreatedEvent(
                 request_id=req.id,
@@ -201,7 +202,8 @@ class BotService:
         if not await self.can_cancel(req):
             raise BotServiceError("Заявку нельзя отменить")
         req.status = RequestStatus.CANCELLED_BY_CUSTOMER
-        manager_ids = await self.objects.list_manager_ids(req.object_id)
+        # менеджеры объекта напрямую + менеджеры категории объекта
+        manager_ids = await self.objects.list_access_manager_ids(req.object_id)
         await self.publisher.publish_request_cancelled(
             RequestCancelledEvent(
                 request_id=req.id,

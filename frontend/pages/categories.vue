@@ -26,6 +26,7 @@
             </td>
             <td class="space-x-2 whitespace-nowrap">
               <button class="btn-secondary" @click="openEdit(cat)">Изменить</button>
+              <button class="btn-secondary" @click="openManagers(cat)">Менеджеры</button>
               <button class="btn-danger" @click="remove(cat)">Удалить</button>
             </td>
           </tr>
@@ -62,6 +63,29 @@
         </div>
       </form>
     </UiModal>
+
+    <!-- Назначение менеджеров категории -->
+    <UiModal :open="managersModal" title="Менеджеры категории" @close="managersModal = false">
+      <p class="mb-3 text-sm text-gray-500">
+        Менеджеры категории получают доступ ко всем её объектам (заявки и уведомления).
+      </p>
+      <p v-if="!managers.length" class="mb-3 text-sm text-gray-500">
+        Нет активных пользователей с ролью «менеджер».
+      </p>
+      <div class="mb-4 max-h-64 space-y-2 overflow-y-auto">
+        <label v-for="m in managers" :key="m.id" class="flex items-center gap-2 text-sm">
+          <input v-model="selectedManagers" type="checkbox" :value="m.id" class="h-4 w-4" />
+          {{ m.username }}
+        </label>
+      </div>
+      <p v-if="managersError" class="mb-2 text-sm text-red-600">{{ managersError }}</p>
+      <div class="flex justify-end gap-2">
+        <button class="btn-secondary" type="button" @click="managersModal = false">Отмена</button>
+        <button class="btn-primary" type="button" :disabled="managersSaving" @click="saveManagers">
+          Сохранить
+        </button>
+      </div>
+    </UiModal>
   </div>
 </template>
 
@@ -70,6 +94,12 @@ interface Category {
   id: number
   name: string
   sort_order: number
+  is_active: boolean
+}
+interface Manager {
+  id: number
+  username: string
+  role: 'admin' | 'manager'
   is_active: boolean
 }
 
@@ -83,6 +113,13 @@ const modal = ref(false)
 const saving = ref(false)
 const formError = ref('')
 const form = ref({ id: 0, name: '', sort_order: 0, is_active: true })
+
+const managersModal = ref(false)
+const managers = ref<Manager[]>([])
+const selectedManagers = ref<number[]>([])
+const managersSaving = ref(false)
+const managersError = ref('')
+const managersCategoryId = ref(0)
 
 async function load() {
   const p = await page<Category>('/categories', { limit, offset: offset.value })
@@ -139,6 +176,44 @@ async function remove(cat: Category) {
     alert('Не удалось удалить категорию')
   }
 }
+
+async function openManagers(cat: Category) {
+  managersCategoryId.value = cat.id
+  managersError.value = ''
+  managersModal.value = true
+  try {
+    const out = await api<{ category_id: number; user_ids: number[] }>(`/categories/${cat.id}/managers`)
+    selectedManagers.value = [...out.user_ids]
+  } catch {
+    managersError.value = 'Не удалось загрузить менеджеров'
+  }
+}
+
+async function saveManagers() {
+  managersSaving.value = true
+  managersError.value = ''
+  try {
+    await api(`/categories/${managersCategoryId.value}/managers`, {
+      method: 'PUT',
+      body: { user_ids: selectedManagers.value },
+    })
+    managersModal.value = false
+  } catch {
+    managersError.value = 'Не удалось сохранить менеджеров'
+  } finally {
+    managersSaving.value = false
+  }
+}
+
+onMounted(async () => {
+  // менеджеры для модалки назначения
+  try {
+    const p = await page<Manager>('/users', { limit: 1000 })
+    managers.value = p.items.filter((u) => u.role === 'manager' && u.is_active)
+  } catch {
+    /* не критично */
+  }
+})
 
 await load()
 </script>

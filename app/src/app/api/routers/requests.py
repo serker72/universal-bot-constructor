@@ -94,10 +94,10 @@ async def change_status(
     if req is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Request not found")
 
-    # доступ: только менеджер, назначенный на объект заявки
+    # доступ: менеджер, назначенный на объект напрямую или на категорию объекта
     if user.role != UserRole.MANAGER:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Manager only")
-    manager_ids = await objects.list_manager_ids(req.object_id)
+    manager_ids = await objects.list_access_manager_ids(req.object_id)
     if user.id not in manager_ids:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your object")
 

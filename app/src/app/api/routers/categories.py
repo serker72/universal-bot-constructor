@@ -5,10 +5,16 @@ from sqlalchemy import asc
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 
 from app.api.deps import AdminUser
-from app.api.schemas.category import CategoryIn, CategoryOut
+from app.api.schemas.category import (
+    CategoryIn,
+    CategoryManagersIn,
+    CategoryManagersOut,
+    CategoryOut,
+)
 from app.api.schemas.common import Page
 from app.domain.models import Category
 from app.repository.category import CategoryRepository
+from app.repository.user import UserRepository
 
 router = APIRouter(prefix="/categories", route_class=DishkaRoute, tags=["categories"])
 
@@ -90,3 +96,46 @@ async def delete_category(
     if category is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Category not found")
     await repo.delete(category)
+
+
+@router.get("/{category_id}/managers", response_model=CategoryManagersOut)
+async def get_managers(
+    category_id: int,
+    _admin: FromDishka[AdminUser],
+    repo: FromDishka[CategoryRepository],
+) -> CategoryManagersOut:
+    """Список id менеджеров категории."""
+    category = await repo.get(category_id)
+    if category is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Category not found")
+    user_ids = await repo.list_manager_ids(category_id)
+    return CategoryManagersOut(category_id=category_id, user_ids=user_ids)
+
+
+@router.put("/{category_id}/managers", response_model=CategoryManagersOut)
+async def set_managers(
+    category_id: int,
+    data: CategoryManagersIn,
+    _admin: FromDishka[AdminUser],
+    repo: FromDishka[CategoryRepository],
+    users: FromDishka[UserRepository],
+) -> CategoryManagersOut:
+    """Заменить список менеджеров категории (доступ ко всем объектам
+    категории)."""
+    category = await repo.get(category_id)
+    if category is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Category not found")
+    # все указанные пользователи должны существовать
+    for user_id in data.user_ids:
+        user = await users.get(user_id)
+        if user is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"User {user_id} not found"
+            )
+    current = set(await repo.list_manager_ids(category_id))
+    target = set(data.user_ids)
+    for user_id in current - target:
+        await repo.remove_manager(category_id, user_id)
+    for user_id in target - current:
+        await repo.add_manager(category_id, user_id)
+    return CategoryManagersOut(category_id=category_id, user_ids=sorted(target))

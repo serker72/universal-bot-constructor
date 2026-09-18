@@ -1,6 +1,7 @@
 """Модели SQLAlchemy. Импортируются все, чтобы alembic видел метаданные."""
 
 from app.domain.models.category import Category
+from app.domain.models.category_manager import CategoryManager
 from app.domain.models.device import Device
 from app.domain.models.object import Object
 from app.domain.models.object_manager import ObjectManager
@@ -12,6 +13,7 @@ from app.domain.models.visitor import Visitor
 
 __all__ = [
     "Category",
+    "CategoryManager",
     "Device",
     "Object",
     "ObjectManager",

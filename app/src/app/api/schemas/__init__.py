@@ -1,7 +1,12 @@
 """Pydantic-схемы API."""
 
 from app.api.schemas.auth import LoginIn, LoginOut
-from app.api.schemas.category import CategoryIn, CategoryOut
+from app.api.schemas.category import (
+    CategoryIn,
+    CategoryManagersIn,
+    CategoryManagersOut,
+    CategoryOut,
+)
 from app.api.schemas.common import Page
 from app.api.schemas.device import DeviceOut
 from app.api.schemas.object import ObjectIn, ObjectOut, ObjectManagersIn, ObjectManagersOut
@@ -12,6 +17,10 @@ from app.api.schemas.user import UserIn, UserOut, UserUpdateIn
 from app.api.schemas.visitor import VisitorOut
 
 __all__ = [
+    "CategoryIn",
+    "CategoryManagersIn",
+    "CategoryManagersOut",
+    "CategoryOut",
     "DeviceOut",
     "LoginIn",
     "LoginOut",

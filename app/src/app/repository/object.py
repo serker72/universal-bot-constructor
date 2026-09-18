@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 from sqlalchemy import asc, select
 
-from app.domain.models import Object, ObjectManager
+from app.domain.models import CategoryManager, Object, ObjectManager
 from app.repository.base import BaseRepository
 
 
@@ -59,8 +59,26 @@ class ObjectRepository(BaseRepository[Object]):
             await self.session.delete(link)
 
     async def list_manager_ids(self, object_id: int) -> list[int]:
-        """Id менеджеров, назначенных на объект."""
+        """Id менеджеров, назначенных на объект напрямую (object_managers)."""
         links = await self.session.scalars(
             select(ObjectManager.user_id).where(ObjectManager.object_id == object_id)
         )
         return list(links)
+
+    async def list_access_manager_ids(self, object_id: int) -> list[int]:
+        """Id менеджеров с доступом к объекту: прямые связи ∪ менеджеры
+        категории объекта (доступ через категорию)."""
+        obj = await self.get(object_id)
+        if obj is None:
+            return []
+        direct = await self.session.scalars(
+            select(ObjectManager.user_id).where(
+                ObjectManager.object_id == object_id
+            )
+        )
+        via_category = await self.session.scalars(
+            select(CategoryManager.user_id).where(
+                CategoryManager.category_id == obj.category_id
+            )
+        )
+        return sorted(set(direct) | set(via_category))

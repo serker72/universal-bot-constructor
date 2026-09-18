@@ -28,7 +28,11 @@ from aiogram_dialog.widgets.kbd import (
 )
 from aiogram_dialog.widgets.text import Const, Format
 
-from app.bot.dialogs.getters import hours_getter_factory, profile_getter
+from app.bot.dialogs.getters import (
+    get_bot_service,
+    hours_getter_factory,
+    profile_getter,
+)
 from app.bot.dialogs.time_items import generate_hours, generate_minutes
 from app.bot.services import BotService, BotServiceError
 from app.bot.states import RequestStates
@@ -58,11 +62,19 @@ async def on_use_profile_phone(
     callback: CallbackQuery, button: Button, manager: DialogManager,
 ) -> None:
     """Кнопка «Использовать номер из профиля»."""
-    phone = manager.dialog_data.get("profile_phone")
+    # profile_phone приходит из геттера окна в данные рендера, а не в
+    # dialog_data, поэтому телефон запрашиваем заново через сервис.
+    service: BotService = await get_bot_service(manager)
+    phone = await service.get_profile_phone(callback.from_user.id)
     if phone:
         manager.dialog_data["phone"] = phone
         await manager.switch_to(RequestStates.start_date)
-    await callback.answer()
+        await callback.answer()
+    else:
+        await callback.answer(
+            "Номер в профиле не найден. Отправьте номер сообщением.",
+            show_alert=True,
+        )
 
 
 async def on_phone_input(
@@ -107,6 +119,22 @@ async def on_start_date_selected(
     await _after_start_date(manager)
 
 
+async def _to_comment_or_fix_dates(
+    manager: DialogManager, event: CallbackQuery,
+) -> None:
+    """Переход к комментарию с предварительной валидацией дат.
+
+    При ошибке пользователь остаётся на окне даты окончания
+    (алерт с текстом ошибки), комментарий не запрашивается.
+    """
+    error = validate_request_data(manager.dialog_data)
+    if error is not None:
+        await event.answer(f"⚠️ {error}", show_alert=True)
+        await manager.switch_to(RequestStates.end_date)
+        return
+    await manager.switch_to(RequestStates.input_comment)
+
+
 async def on_end_date_selected(
     event, widget: ManagedCalendar, manager: DialogManager, selected_date: date,
 ) -> None:
@@ -115,7 +143,7 @@ async def on_end_date_selected(
     if _use_time(manager):
         await manager.switch_to(RequestStates.end_hour)
     else:
-        await manager.switch_to(RequestStates.input_comment)
+        await _to_comment_or_fix_dates(manager, event)
 
 
 # ---------------------------------------------------------------------------
@@ -153,9 +181,9 @@ async def on_end_hour_selected(
 async def on_end_min_selected(
     callback: CallbackQuery, select: Select, manager: DialogManager, minute: int,
 ) -> None:
-    """Выбор минут окончания → комментарий."""
+    """Выбор минут окончания → валидация дат → комментарий."""
     manager.dialog_data["end_min"] = minute
-    await manager.switch_to(RequestStates.input_comment)
+    await _to_comment_or_fix_dates(manager, callback)
 
 
 # ---------------------------------------------------------------------------

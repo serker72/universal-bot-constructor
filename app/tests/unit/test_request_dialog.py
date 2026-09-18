@@ -1,8 +1,12 @@
 """Тесты логики диалога заявки (валидация, агрегация) без Telegram."""
 
+import pytest
+
+from app.bot.states import RequestStates
 from datetime import date, time
 
 from app.bot.dialogs.request_dialog import (
+    _to_comment_or_fix_dates,
     collect_request_data,
     validate_request_data,
 )
@@ -134,3 +138,57 @@ def test_collect_end_date_without_time():
     payload = collect_request_data(manager)
     assert payload["end_date"] == date(2026, 9, 21)
     assert payload["end_time"] is None
+
+
+# -- переход к комментарию с валидацией дат ---------------------------------
+
+
+class EventStub:
+    """Заглушка CallbackQuery: фиксирует answer()."""
+
+    def __init__(self) -> None:
+        self.answer_args: tuple | None = None
+        self.answer_kwargs: dict | None = None
+
+    async def answer(self, *args, **kwargs) -> None:
+        self.answer_args = args
+        self.answer_kwargs = kwargs
+
+
+class SwitchManager:
+    """Заглушка DialogManager: фиксирует switch_to()."""
+
+    def __init__(self, dialog_data: dict) -> None:
+        self.dialog_data = dialog_data
+        self.switched_to: list = []
+
+    async def switch_to(self, state) -> None:
+        self.switched_to.append(state)
+
+
+@pytest.mark.asyncio
+async def test_to_comment_skipped_on_invalid_dates():
+    """Ошибочные даты → алерт и возврат на окно даты окончания."""
+    manager = SwitchManager(
+        {"start_date": "2026-09-20", "end_date": "2026-09-19"}
+    )
+    event = EventStub()
+
+    await _to_comment_or_fix_dates(manager, event)
+
+    assert event.answer_kwargs == {"show_alert": True}
+    assert manager.switched_to == [RequestStates.end_date]
+
+
+@pytest.mark.asyncio
+async def test_to_comment_proceeds_on_valid_dates():
+    """Корректные даты → переход к окну комментария, без алерта."""
+    manager = SwitchManager(
+        {"start_date": "2026-09-20", "end_date": "2026-09-21"}
+    )
+    event = EventStub()
+
+    await _to_comment_or_fix_dates(manager, event)
+
+    assert event.answer_args is None
+    assert manager.switched_to == [RequestStates.input_comment]

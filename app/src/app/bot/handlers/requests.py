@@ -2,7 +2,7 @@
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
-from aiogram_dialog import DialogManager
+from aiogram_dialog import DialogManager, StartMode
 from dishka.integrations.aiogram import FromDishka
 
 from app.bot.dialogs.request_dialog import FLAG_USE_END_DATE, FLAG_USE_TIME
@@ -47,8 +47,12 @@ async def start_request(
         return
     use_time = await bot_service.app_settings.get_is_use_time_in_request()
     use_end_date = await bot_service.app_settings.get_is_use_end_date_in_request()
+    # RESET_STACK: закрыть возможный незавершённый диалог (состояние
+    # хранится в Redis и переживает рестарты), иначе он останется в стеке
+    # и отрисуется после done() нового диалога.
     await dialog_manager.start(
         RequestStates.input_phone,
+        mode=StartMode.RESET_STACK,
         data={
             "object_id": callback_data.object_id,
             FLAG_USE_TIME: use_time,

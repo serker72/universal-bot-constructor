@@ -23,6 +23,9 @@ services:
       - "127.0.0.1:3000:3000"
 
 networks:
+  # Не external: при отдельном запуске (без srv.yml) compose создаст сеть
+  # сам; если сеть уже создана (srv.yml / единый docker-compose.yml),
+  # она переиспользуется по имени. External-декларация конфликтовала
+  # с srv.yml при include в единый docker-compose.yml.
   frontend:
     name: ubc-frontend
-    external: true

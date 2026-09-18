@@ -40,6 +40,9 @@ services:
       - backend
 
 networks:
+  # Не external: при отдельном запуске (без srv.yml) compose создаст сеть
+  # сам; если сеть уже создана (srv.yml / единый docker-compose.yml),
+  # она переиспользуется по имени. External-декларация конфликтовала
+  # с srv.yml при include в единый docker-compose.yml.
   backend:
     name: ubc-backend
-    external: true

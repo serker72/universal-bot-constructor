@@ -122,3 +122,47 @@ async def test_set_managers_unknown_user_400(admin_client, obj):
 async def test_get_managers_missing_object_404(admin_client):
     resp = await admin_client.get(f"{API}/objects/9999/managers")
     assert resp.status_code == 404
+
+
+async def test_category_managers_flow(admin_client, category, manager_user):
+    """GET/PUT /categories/{id}/managers: назначение/снятие менеджеров
+    категории."""
+    # пусто
+    resp = await admin_client.get(f"{API}/categories/{category.id}/managers")
+    assert resp.status_code == 200
+    assert resp.json() == {"category_id": category.id, "user_ids": []}
+
+    # назначить
+    resp = await admin_client.put(
+        f"{API}/categories/{category.id}/managers",
+        json={"user_ids": [manager_user.id]},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["user_ids"] == [manager_user.id]
+
+    # прочитать
+    resp = await admin_client.get(f"{API}/categories/{category.id}/managers")
+    assert resp.json()["user_ids"] == [manager_user.id]
+
+    # снять
+    resp = await admin_client.put(
+        f"{API}/categories/{category.id}/managers", json={"user_ids": []}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["user_ids"] == []
+
+    # менеджер не имеет доступа к эндпоинтам менеджеров категории
+    # (manager_client проверяется в тестах категорий)
+
+
+async def test_set_category_managers_unknown_user_400(admin_client, category):
+    resp = await admin_client.put(
+        f"{API}/categories/{category.id}/managers", json={"user_ids": [9999]}
+    )
+    assert resp.status_code == 400
+    assert "9999" in resp.json()["detail"]
+
+
+async def test_get_category_managers_missing_404(admin_client):
+    resp = await admin_client.get(f"{API}/categories/9999/managers")
+    assert resp.status_code == 404

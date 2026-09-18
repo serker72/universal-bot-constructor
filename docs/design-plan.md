@@ -16,7 +16,11 @@
 ## Роли
 
 - **admin** — управляет пользователями, настройками, контентом (категории/объекты), видит все заявки (но не обрабатывает), банит/разбанивает посетителей, управляет сессиями/устройствами.
-- **manager** — управляет только своими объектами (через таблицу связи объект↔менеджер), видит и обрабатывает заявки по своим объектам.
+- **manager** — управляет своими объектами (через таблицу связи объект↔менеджер) **и объектами своих категорий** (через таблицу связи категория↔менеджер), видит и обрабатывает заявки по доступным объектам.
+
+Доступ менеджера к объекту определяется объединением:
+- прямая связь в `object_managers`;
+- связь с категорией объекта в `category_managers` (доступ ко **всем** объектам категории).
 
 Регистрация админ/менеджер-пользователей — только вручную через frontend (создаёт админ).
 
@@ -75,6 +79,7 @@ Compose-файлы разделены по назначению:
 - **categories** — id, name, sort_order, is_active, created_at, updated_at
 - **objects** — id, category_id (FK), name, short_description (HTML/Markdown), pdf_path, sort_order, is_active, created_at, updated_at
 - **object_managers** — object_id (FK), user_id (FK), связь многие-ко-многим
+- **category_managers** — category_id (FK), user_id (FK), связь многие-ко-многим (доступ менеджера ко всем объектам категории)
 - **users** — id, username, password_hash, role (admin/manager), telegram_id (nullable), is_active, created_at, updated_at
 - **visitors** — id, telegram_id (unique), full_name, phone (nullable, сохраняется при регистрации и обновляется в диалоге заявки), consent_given (bool), consent_at (timestamp), is_blocked (bool), blocked_at (timestamp), created_at, updated_at
 - **requests** (заявки) — id, visitor_id (FK), object_id (FK), phone (string, контролируется только формат), comment (nullable), start_date (date, nullable), start_time (time, nullable), end_date (date, nullable), end_time (time, nullable), status (enum: new/approved/rejected/completed/cancelled_by_customer), created_at, updated_at, confirmed_at (nullable, для расчёта интервала отмены)
@@ -96,7 +101,7 @@ Compose-файлы разделены по назначению:
 Эндпоинты:
 
 - **auth**: login, refresh, logout (access+refresh в httpOnly cookies; оба токена заносятся в blacklist в Redis с TTL при logout/отзыве)
-- **categories**: CRUD + сортировка + флаг активности
+- **categories**: CRUD + сортировка + флаг активности + назначение менеджеров
 - **objects**: CRUD + сортировка + флаг активности + назначение менеджеров
 - **pdf**: загрузка (multipart/form-data, только PDF, ≤20МБ), получение (endpoint с авторизацией, открытие в новой вкладке)
 - **users**: список, создание, редактирование, удаление (только admin)
@@ -130,7 +135,7 @@ Compose-файлы разделены по назначению:
 
 - **/login** — вход
 - **/dashboard** — дашборд
-- **/categories** — категории (CRUD, сортировка, активность)
+- **/categories** — категории (CRUD, сортировка, активность, назначение менеджеров)
 - **/objects** — объекты (CRUD, сортировка, активность, назначение менеджеров, загрузка PDF)
 - **/requests** — заявки (фильтры по статусу/дате/объекту; менеджер — свои, админ — все; подтверждение/отклонение менеджером)
 - **/requests** — заявки (фильтры по статусу/дате/объекту; менеджер — свои, админ — все; подтверждение/отклонение менеджером)
@@ -334,6 +339,70 @@ Unit-тесты (`app/tests/unit/`):
 
 ---
 
+## Доступ менеджера к категории (category_managers)
+
+> Расширение модели доступа: менеджеру можно назначить категорию целиком,
+> а не только отдельные объекты. Доступ к объекту = прямая связь ∪ связь
+> через категорию объекта.
+
+### Модель доступа
+
+- **Прямая связь** — `object_managers` (как раньше): менеджер назначается
+  на конкретный объект.
+- **Связь через категорию** — `category_managers`: менеджер назначается
+  на категорию и получает доступ ко **всем** объектам этой категории
+  (заявки: просмотр и обработка; уведомления о новых/отменённых заявках).
+- Итоговый список менеджеров объекта — объединение без дубликатов
+  (`ObjectRepository.list_access_manager_ids`).
+- Управление прямыми связями объекта (`GET/PUT /objects/{id}/managers`)
+  показывает **только прямые** связи — чтобы редактирование не затирало
+  связи, унаследованные от категории.
+
+### Схема БД (миграция alembic)
+
+- Новая таблица **category_managers**: id, category_id (FK → categories,
+  CASCADE), user_id (FK → users, CASCADE); уникальный индекс
+  `(category_id, user_id)`, индексы по обоим полям.
+- Домен: `CategoryManager` (`app/src/app/domain/models/category_manager.py`),
+  связи `Category.managers` ↔ `User.managed_categories`.
+
+### Репозитории
+
+- `CategoryRepository`: `add_manager` / `remove_manager` / `list_manager_ids`
+  (прямые связи категории).
+- `ObjectRepository`: `list_access_manager_ids(object_id)` — объединённый
+  список менеджеров объекта (прямые ∪ категорийные); `list_manager_ids`
+  остаётся списком только прямых связей.
+- `RequestRepository.list_manager_object_ids(user_id)` — объекты прямых
+  связей ∪ объекты категорий менеджера (видимость списка заявок).
+
+### API
+
+- **GET/PUT `/categories/{id}/managers`** (admin) — чтение/замена списка
+  менеджеров категории (схемы `CategoryManagersIn/Out`).
+- `POST /requests/{id}/status` — проверка доступа менеджера через
+  `list_access_manager_ids` (прямо или через категорию объекта).
+- Список/карточка заявок — через `list_manager_object_ids` (объединённый).
+
+### Бот (уведомления)
+
+- `BotService.create_request` / `cancel_request` — уведомления менеджерам
+  по объединённому списку (`list_access_manager_ids`): менеджеры объекта
+  напрямую + менеджеры категории объекта.
+
+### Frontend
+
+- `/categories` — кнопка «Менеджеры» и модалка назначения (по образцу
+  объектов): чекбоксы активных менеджеров, PUT полного списка.
+
+### Тесты
+
+- Интеграционные: менеджеры категории (GET/PUT flow, unknown user 400,
+  404); менеджер категории видит заявки по объектам категории и меняет
+  их статус; `GET /objects/{id}/managers` — только прямые связи.
+
+---
+
 ## Как использовать этот файл в новой сессии
 
 1. Откройте новый диалог.
@@ -497,3 +566,18 @@ Unit-тесты (`app/tests/unit/`):
     - прогон: 211 passed (unit + integration) в `ubc-test-runner`;
   - проверено: все контейнеры (backend, bot, frontend, nginx) подняты,
     бот в long-polling, health 200.
+- **Доступ менеджера к категории (category_managers)** — выполнен:
+  - миграция `c37575650d4b` (таблица `category_managers`), домен
+    `CategoryManager` + связи `Category.managers`/`User.managed_categories`;
+  - репозитории: `CategoryRepository.add/remove/list_manager_ids`,
+    `ObjectRepository.list_access_manager_ids` (прямые ∪ категорийные),
+    `RequestRepository.list_manager_object_ids` (объединённый);
+  - API: `GET/PUT /categories/{id}/managers` (admin, схемы
+    `CategoryManagersIn/Out`); `POST /requests/{id}/status` — доступ
+    через объект или категорию объекта; список заявок менеджера —
+    по объединённому набору объектов;
+  - бот: уведомления о новых/отменённых заявках — объединённый список
+    менеджеров объекта и категории объекта;
+  - frontend: `/categories` — кнопка «Менеджеры» + модалка назначения;
+  - тесты: 103 unit + 116 integration passed (прогон в `ubc-test-runner`,
+    миграция тестовой БД через `db-update-test`).

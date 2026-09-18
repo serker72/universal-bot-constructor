@@ -195,3 +195,61 @@ async def test_change_status_missing_404(manager_client):
         f"{API}/requests/9999/status", json={"status": "approved"}
     )
     assert resp.status_code == 404
+
+
+# -- доступ менеджера через категорию ---------------------------------------
+
+
+async def test_manager_via_category_sees_requests(
+    db, admin_client, manager_client, manager_user, category, obj, request_obj
+):
+    """Менеджер, назначенный на категорию, видит заявки по объектам категории."""
+    resp = await admin_client.put(
+        f"{API}/categories/{category.id}/managers",
+        json={"user_ids": [manager_user.id]},
+    )
+    assert resp.status_code == 200
+
+    resp = await manager_client.get(f"{API}/requests")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert body["items"][0]["id"] == request_obj.id
+
+    # карточка заявки доступна
+    resp = await manager_client.get(f"{API}/requests/{request_obj.id}")
+    assert resp.status_code == 200
+
+
+async def test_manager_via_category_changes_status(
+    admin_client, manager_client, manager_user, category, obj, request_obj,
+    published_events,
+):
+    """Менеджер категории может менять статус заявки по объекту категории."""
+    resp = await admin_client.put(
+        f"{API}/categories/{category.id}/managers",
+        json={"user_ids": [manager_user.id]},
+    )
+    assert resp.status_code == 200
+
+    resp = await manager_client.post(
+        f"{API}/requests/{request_obj.id}/status", json={"status": "approved"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "approved"
+
+
+async def test_object_managers_endpoint_direct_only(
+    admin_client, manager_client, manager_user, category, obj
+):
+    """GET /objects/{id}/managers — только прямые связи: менеджер категории
+    не отображается как менеджер объекта (иначе PUT перезаписал бы связи)."""
+    resp = await admin_client.put(
+        f"{API}/categories/{category.id}/managers",
+        json={"user_ids": [manager_user.id]},
+    )
+    assert resp.status_code == 200
+
+    resp = await admin_client.get(f"{API}/objects/{obj.id}/managers")
+    assert resp.status_code == 200
+    assert resp.json()["user_ids"] == []

@@ -6,13 +6,23 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class ObjectIn(BaseModel):
-    """Создание/обновление объекта."""
+    """Создание объекта (все поля обязательны, кроме опциональных)."""
 
     category_id: int
     name: str = Field(min_length=1, max_length=255)
     short_description: str = ""
     sort_order: int = 0
     is_active: bool = True
+
+
+class ObjectUpdateIn(BaseModel):
+    """Обновление объекта (PATCH: все поля опциональны)."""
+
+    category_id: int | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    short_description: str | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None
 
 
 class ObjectOut(BaseModel):

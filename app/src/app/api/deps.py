@@ -5,6 +5,7 @@ AuthProvider выдаёт текущего пользователя по access-
 """
 
 from dataclasses import dataclass
+from typing import Any
 
 from dishka import Provider, Scope, provide
 from fastapi import HTTPException, Request, status
@@ -23,6 +24,16 @@ FORBIDDEN = HTTPException(
     status_code=status.HTTP_403_FORBIDDEN,
     detail="Admin only",
 )
+
+
+def get_or_404(obj: Any, detail: str) -> Any:
+    """Объект или 404 (общий паттерн всех CRUD-роутеров).
+
+    Использование: category = get_or_404(await repo.get(id), "Category not found")
+    """
+    if obj is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail)
+    return obj
 
 
 @dataclass

@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, status
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 
-from app.api.deps import AdminUser
+from app.api.deps import AdminUser, get_or_404
 from app.api.schemas.common import Page
 from app.api.schemas.device import DeviceOut
 from app.repository.device import DeviceRepository
@@ -42,7 +42,5 @@ async def get_device(
     repo: FromDishka[DeviceRepository],
 ) -> DeviceOut:
     """Получить устройство."""
-    device = await repo.get(device_id)
-    if device is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Device not found")
+    device = get_or_404(await repo.get(device_id), "Device not found")
     return DeviceOut.model_validate(device)

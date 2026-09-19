@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 
-from app.api.deps import AdminUser
+from app.api.deps import AdminUser, get_or_404
 from app.api.schemas.common import Page
 from app.api.schemas.visitor import VisitorOut
 from app.repository.visitor import VisitorRepository
@@ -44,9 +44,7 @@ async def get_visitor(
     repo: FromDishka[VisitorRepository],
 ) -> VisitorOut:
     """Получить посетителя."""
-    visitor = await repo.get(visitor_id)
-    if visitor is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Visitor not found")
+    visitor = get_or_404(await repo.get(visitor_id), "Visitor not found")
     return VisitorOut.model_validate(visitor)
 
 
@@ -57,9 +55,7 @@ async def ban_visitor(
     repo: FromDishka[VisitorRepository],
 ) -> VisitorOut:
     """Заблокировать посетителя."""
-    visitor = await repo.get(visitor_id)
-    if visitor is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Visitor not found")
+    visitor = get_or_404(await repo.get(visitor_id), "Visitor not found")
     if not visitor.is_blocked:
         visitor.is_blocked = True
         visitor.blocked_at = datetime.now(timezone.utc)
@@ -73,9 +69,7 @@ async def unban_visitor(
     repo: FromDishka[VisitorRepository],
 ) -> VisitorOut:
     """Разблокировать посетителя."""
-    visitor = await repo.get(visitor_id)
-    if visitor is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Visitor not found")
+    visitor = get_or_404(await repo.get(visitor_id), "Visitor not found")
     visitor.is_blocked = False
     visitor.blocked_at = None
     return VisitorOut.model_validate(visitor)

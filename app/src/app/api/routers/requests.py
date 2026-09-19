@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 
+from app.api.deps import get_or_404
 from app.api.schemas.common import Page
 from app.api.schemas.request import RequestOut, RequestStatusIn
 from app.domain.models import RequestStatus, User, UserRole
@@ -23,18 +24,19 @@ router = APIRouter(prefix="/requests", route_class=DishkaRoute, tags=["requests"
 
 
 async def _visible_object_ids(
-    user: User, requests: RequestRepository
+    user: User, objects: ObjectRepository
 ) -> list[int] | None:
     """None — все объекты (admin), список — объекты менеджера."""
     if user.role == UserRole.ADMIN:
         return None
-    return await requests.list_manager_object_ids(user.id)
+    return await objects.list_manager_object_ids(user.id)
 
 
 @router.get("", response_model=Page[RequestOut])
 async def list_requests(
     user: FromDishka[User],
     repo: FromDishka[RequestRepository],
+    objects: FromDishka[ObjectRepository],
     status_filter: RequestStatus | None = None,
     object_id: int | None = None,
     date_from: datetime | None = None,
@@ -43,7 +45,7 @@ async def list_requests(
     offset: int = 0,
 ) -> Page[RequestOut]:
     """Список заявок (менеджер — только по своим объектам)."""
-    object_ids = await _visible_object_ids(user, repo)
+    object_ids = await _visible_object_ids(user, objects)
     items, total = await repo.list_page(
         object_ids=object_ids,
         status=status_filter,
@@ -66,12 +68,11 @@ async def get_request(
     request_id: int,
     user: FromDishka[User],
     repo: FromDishka[RequestRepository],
+    objects: FromDishka[ObjectRepository],
 ) -> RequestOut:
     """Получить заявку (с проверкой доступа)."""
-    req = await repo.get(request_id)
-    if req is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Request not found")
-    object_ids = await _visible_object_ids(user, repo)
+    req = get_or_404(await repo.get(request_id), "Request not found")
+    object_ids = await _visible_object_ids(user, objects)
     if object_ids is not None and req.object_id not in object_ids:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Request not found")
     return RequestOut.model_validate(req)
@@ -90,9 +91,7 @@ async def change_status(
     Допустимые переходы: new → approved | rejected,
     approved → completed (менеджер объекта).
     """
-    req = await repo.get(request_id)
-    if req is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Request not found")
+    req = get_or_404(await repo.get(request_id), "Request not found")
 
     # доступ: менеджер, назначенный на объект напрямую или на категорию объекта
     if user.role != UserRole.MANAGER:

@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 
-from app.api.deps import AdminUser
+from app.api.deps import AdminUser, get_or_404
 from app.domain.models import User
 from app.repository.object import ObjectRepository
 from app.services.pdf import PdfError, PdfService
@@ -21,11 +21,16 @@ async def upload_pdf(
     pdf: FromDishka[PdfService],
 ) -> dict[str, str]:
     """Загрузить PDF для объекта (multipart/form-data, только PDF, ≤20МБ)."""
-    obj = await repo.get(object_id)
-    if obj is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Object not found")
+    obj = get_or_404(await repo.get(object_id), "Object not found")
     filename = file.filename or "document.pdf"
+    # размер проверяем ДО чтения: файл не грузится в память целиком,
+    # если он заведомо больше лимита
+    declared = file.size
+    if declared is not None and declared > pdf.max_size:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "file too large")
     content = await file.read()
+    if len(content) > pdf.max_size:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "file too large")
     try:
         pdf.validate(filename, content)
     except PdfError as exc:
@@ -45,9 +50,7 @@ async def download_pdf(
     pdf: FromDishka[PdfService],
 ) -> FileResponse:
     """Получить PDF объекта (открывается в новой вкладке)."""
-    obj = await repo.get(object_id)
-    if obj is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Object not found")
+    obj = get_or_404(await repo.get(object_id), "Object not found")
     if not obj.pdf_path:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "PDF not uploaded")
     try:

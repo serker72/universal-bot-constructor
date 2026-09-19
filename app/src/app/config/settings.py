@@ -13,7 +13,7 @@
 from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Корень проекта: app/src/app/config/settings.py -> parents[4]
@@ -161,11 +161,12 @@ class BackendSettings(BaseSettings):
     base_url: str = "http://localhost"
 
     # JWT (access+refresh в httpOnly cookies)
-    jwt_secret: str = ""                 # BACKEND_JWT_SECRET
+    jwt_secret: str = ""                 # BACKEND_JWT_SECRET (обязателен, см. Settings)
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 30
-    cookie_secure: bool = False          # True — только по HTTPS (prod)
+    # None — выводится из PROJECT_URL_SCHEME (https → True); явное значение переопределяет
+    cookie_secure: bool | None = None
     cookie_domain: str | None = None     # домен для cookies (prod)
 
     # Загрузка PDF
@@ -280,6 +281,28 @@ class Settings(BaseSettings):
     cors: CorsSettings = Field(default_factory=CorsSettings)
     frontend: FrontendSettings = Field(default_factory=FrontendSettings)
     nginx: NginxSettings = Field(default_factory=NginxSettings)
+
+    @model_validator(mode="after")
+    def _validate_security(self) -> "Settings":
+        """Fail-fast проверки секретов при старте приложения.
+
+        - JWT-секрет обязателен (иначе токены подделываются);
+        - в prod секрет не короче 32 байт;
+        - cookie_secure по умолчанию следует url_scheme (https → True).
+        """
+        if not self.backend.jwt_secret:
+            raise ValueError(
+                "BACKEND_JWT_SECRET обязателен; сгенерируйте: "
+                "openssl rand -base64 64 | tr -d '\n'"
+            )
+        if (
+            self.project.environment == "prod"
+            and len(self.backend.jwt_secret.encode("utf-8")) < 32
+        ):
+            raise ValueError("BACKEND_JWT_SECRET в prod должен быть >= 32 байт")
+        if self.backend.cookie_secure is None:
+            self.backend.cookie_secure = self.project.url_scheme == "https"
+        return self
 
 
 # Глобальный экземпляр для импорта в других модулях

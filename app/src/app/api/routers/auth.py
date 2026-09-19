@@ -11,6 +11,14 @@ from app.services.security import RateLimiter
 router = APIRouter(prefix="/auth", route_class=DishkaRoute, tags=["auth"])
 
 
+def _client_ip(request: Request) -> str:
+    """Реальный IP клиента: первый X-Forwarded-For (nginx) или socket-адрес."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 @router.post("/login", response_model=LoginOut)
 async def login(
     data: LoginIn,
@@ -20,8 +28,12 @@ async def login(
     limiter: FromDishka[RateLimiter],
 ) -> User:
     """Вход: httpOnly cookies с access/refresh, регистрация устройства."""
-    client_ip = request.client.host if request.client else "unknown"
-    if not await limiter.check(f"login:{client_ip}", limit=10, window_seconds=60):
+    client_ip = _client_ip(request)
+    # ключ ip+username: не даём одному IP брутфорсить разные аккаунты
+    # и не блокируем всех клиентов одного IP при атаке на один аккаунт
+    if not await limiter.check(
+        f"login:{client_ip}:{data.username}", limit=10, window_seconds=60
+    ):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many attempts, try later",
@@ -69,3 +81,9 @@ async def logout(
         response,
     )
     return {"status": "ok"}
+
+
+@router.get("/me", response_model=LoginOut)
+async def me(user: FromDishka[User]) -> User:
+    """Текущий пользователь по access-токену (роль — с сервера, не из localStorage)."""
+    return user

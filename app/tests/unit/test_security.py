@@ -20,12 +20,15 @@ class FakeRedis:
     async def exists(self, key: str) -> int:
         return 1 if key in self.store else 0
 
-    async def incr(self, key: str) -> int:
-        self.store[key] = str(int(self.store.get(key, "0")) + 1)
-        return int(self.store[key])
-
-    async def expire(self, key: str, seconds: int) -> None:
-        self.ttl[key] = seconds
+    async def eval(self, script: str, numkeys: int, *args) -> int:
+        """Эмуляция Lua-скрипта rate-limit (INCR + EXPIRE при первом счётчике)."""
+        key = args[0]
+        window = int(args[1])
+        count = int(self.store.get(key, "0")) + 1
+        self.store[key] = str(count)
+        if count == 1:
+            self.ttl[key] = window
+        return count
 
 
 @pytest.fixture

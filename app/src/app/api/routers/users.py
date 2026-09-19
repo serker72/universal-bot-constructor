@@ -1,9 +1,10 @@
 """Роутер пользователей (только admin)."""
 
 from fastapi import APIRouter, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 
-from app.api.deps import AdminUser
+from app.api.deps import AdminUser, get_or_404
 from app.api.schemas.common import Page
 from app.api.schemas.user import UserIn, UserOut, UserUpdateIn
 from app.domain.models import User, UserRole
@@ -50,7 +51,14 @@ async def create_user(
         telegram_id=data.telegram_id,
         is_active=data.is_active,
     )
-    await repo.add(user)
+    try:
+        await repo.add(user)
+    except IntegrityError:
+        # гонка: username (или telegram_id) занят между проверкой и insert
+        await repo.session.rollback()
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "Username or telegram_id already exists"
+        ) from None
     return UserOut.model_validate(user)
 
 
@@ -61,9 +69,7 @@ async def get_user(
     repo: FromDishka[UserRepository],
 ) -> UserOut:
     """Получить пользователя."""
-    user = await repo.get(user_id)
-    if user is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    user = get_or_404(await repo.get(user_id), "User not found")
     return UserOut.model_validate(user)
 
 
@@ -75,9 +81,7 @@ async def update_user(
     repo: FromDishka[UserRepository],
 ) -> UserOut:
     """Редактировать пользователя (пароль, роль, telegram_id, активность)."""
-    user = await repo.get(user_id)
-    if user is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    user = get_or_404(await repo.get(user_id), "User not found")
     if data.password is not None:
         user.password_hash = hash_password(data.password)
     if data.role is not None:
@@ -110,9 +114,7 @@ async def delete_user(
     auth: FromDishka[AuthService],
 ) -> None:
     """Удалить пользователя (сессии и устройства — CASCADE, токены отзываются)."""
-    user = await repo.get(user_id)
-    if user is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    user = get_or_404(await repo.get(user_id), "User not found")
     if user.id == admin.user.id:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "Cannot delete yourself"

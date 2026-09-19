@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.settings import Settings
 from app.domain.models import Device, Session, User
+from app.log import get_logger
 from app.repository.device import DeviceRepository
 from app.repository.session import SessionRepository
 from app.repository.user import UserRepository
@@ -25,6 +26,8 @@ from app.services.tokens import (
 
 ACCESS_COOKIE = "ubc_access"
 REFRESH_COOKIE = "ubc_refresh"
+
+log = get_logger(__name__)
 
 
 class AuthError(Exception):
@@ -213,9 +216,20 @@ class AuthService:
 
         Возвращает количество отозванных сессий.
         """
-        active = await self.sessions.list_by_user(user_id, only_active=True)
+        active, _total = await self.sessions.list_by_user(
+            user_id, only_active=True
+        )
         backend = self.settings.backend
         ttl = backend.refresh_token_expire_days * 24 * 3600
-        for s in active:
-            await self.blacklist.add(s.refresh_token_jti, ttl)
+        # одним pipeline вместо N round-trip'ов; если Redis недоступен —
+        # сессии отзываются в БД (refresh не работает), но уже выданные
+        # access-токены живут до своего exp — логируем и продолжаем
+        try:
+            await self.blacklist.add_many(
+                [(s.refresh_token_jti, ttl) for s in active]
+            )
+        except Exception:
+            log.error(
+                "blacklist_unavailable_on_revoke_all", user_id=user_id
+            )
         return await self.sessions.revoke_all_for_user(user_id)

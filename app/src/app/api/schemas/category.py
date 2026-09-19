@@ -6,11 +6,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class CategoryIn(BaseModel):
-    """Создание/обновление категории."""
+    """Создание категории."""
 
     name: str = Field(min_length=1, max_length=255)
     sort_order: int = 0
     is_active: bool = True
+
+
+class CategoryUpdateIn(BaseModel):
+    """Обновление категории (PATCH: все поля опциональны)."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    sort_order: int | None = None
+    is_active: bool | None = None
 
 
 class CategoryOut(BaseModel):

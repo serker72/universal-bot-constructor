@@ -195,8 +195,9 @@ async def test_session_revoke_all_for_user(db):
     await db.commit()
     assert revoked == 2
 
-    active = await session_repo.list_by_user(user.id, only_active=True)
+    active, active_total = await session_repo.list_by_user(user.id, only_active=True)
     assert active == []
-    all_sessions = await session_repo.list_by_user(user.id)
+    assert active_total == 0
+    all_sessions, _total = await session_repo.list_by_user(user.id)
     assert len(all_sessions) == 2
     assert all(s.is_active is False for s in all_sessions)

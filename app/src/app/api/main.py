@@ -44,11 +44,13 @@ def create_app() -> FastAPI:
     setup_logging(debug=settings.backend.debug)
 
     container = build_container()
+    # Swagger/OpenAPI не раскрываем в prod (поверхность API — только авторизованным)
+    is_prod = settings.project.environment == "prod"
     app = FastAPI(
         title="Universal Bot Constructor API",
         version="0.1.0",
-        docs_url="/api/docs",
-        openapi_url="/api/openapi.json",
+        docs_url=None if is_prod else "/api/docs",
+        openapi_url=None if is_prod else "/api/openapi.json",
         lifespan=lifespan,
     )
 

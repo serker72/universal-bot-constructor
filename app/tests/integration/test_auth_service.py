@@ -96,7 +96,9 @@ async def test_login_success(service: AuthService, user: User, db, auth_data, de
     assert devices[0].device_id == device_id
 
     # активная сессия с jti из refresh-токена
-    sessions = await SessionRepository(db).list_by_user(user.id, only_active=True)
+    sessions, total = await SessionRepository(db).list_by_user(
+        user.id, only_active=True
+    )
     assert len(sessions) == 1
 
 
@@ -275,5 +277,5 @@ async def test_revoke_all_for_user(service: AuthService, user: User, db, auth_da
     await db.commit()
     assert count == 2
 
-    sessions = await SessionRepository(db).list_by_user(user.id)
+    sessions, _total = await SessionRepository(db).list_by_user(user.id)
     assert all(s.is_active is False for s in sessions)

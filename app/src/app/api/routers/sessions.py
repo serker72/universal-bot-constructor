@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, status
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 
-from app.api.deps import AdminUser
+from app.api.deps import AdminUser, get_or_404
 from app.api.schemas.common import Page
 from app.api.schemas.session import SessionOut
 from app.domain.models import Session
@@ -24,9 +24,10 @@ async def list_sessions(
 ) -> Page[SessionOut]:
     """Список сессий (фильтр по пользователю, только активные)."""
     if user_id is not None:
-        items = await repo.list_by_user(user_id, only_active=only_active)
-        total = len(items)
-        page = items[offset : offset + limit]
+        # пагинация в SQL (repo.list_by_user возвращает страницу и total)
+        page, total = await repo.list_by_user(
+            user_id, only_active=only_active, limit=limit, offset=offset
+        )
     else:
         conditions = []
         if only_active:
@@ -49,9 +50,7 @@ async def revoke_session(
     auth: FromDishka[AuthService],
 ) -> SessionOut:
     """Отозвать одну сессию (refresh-токен в blacklist)."""
-    session = await repo.get(session_id)
-    if session is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
+    session = get_or_404(await repo.get(session_id), "Session not found")
     if session.is_active:
         await auth.revoke_session(session)
     return SessionOut.model_validate(session)

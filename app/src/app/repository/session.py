@@ -17,13 +17,26 @@ class SessionRepository(BaseRepository[Session]):
         return await self.find_one(Session.refresh_token_jti == jti)
 
     async def list_by_user(
-        self, user_id: int, *, only_active: bool = False
-    ) -> Sequence[Session]:
-        """Сессии пользователя (опционально только активные)."""
+        self,
+        user_id: int,
+        *,
+        only_active: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> tuple[Sequence[Session], int]:
+        """Сессии пользователя с пагинацией (опционально только активные).
+
+        Возвращает (страница, всего) — пагинация в SQL, не в Python.
+        """
         conditions = [Session.user_id == user_id]
         if only_active:
             conditions.append(Session.is_active.is_(True))
-        return await self.find(*conditions, order_by=Session.created_at.desc())
+        items = await self.find(
+            *conditions, limit=limit, offset=offset,
+            order_by=Session.created_at.desc(),
+        )
+        total = await self.count(*conditions)
+        return items, total
 
     async def revoke(self, session: Session) -> Session:
         """Отозвать одну сессию."""

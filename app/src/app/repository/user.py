@@ -19,6 +19,12 @@ class UserRepository(BaseRepository[User]):
         """Пользователь по привязанному telegram_id (для уведомлений)."""
         return await self.find_one(User.telegram_id == telegram_id)
 
+    async def list_by_ids(self, user_ids: Sequence[int]) -> Sequence[User]:
+        """Пользователи по списку id (один запрос вместо N+1)."""
+        if not user_ids:
+            return []
+        return await self.find(User.id.in_(user_ids))
+
     async def list_telegram_ids_by_role(self, role: UserRole) -> list[int]:
         """Telegram-id активных пользователей роли (для уведомлений)."""
         stmt = select(User.telegram_id).where(

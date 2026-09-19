@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 
-from sqlalchemy import or_, select
+from sqlalchemy import select
 
 from app.domain.models import Visitor
 from app.repository.base import BaseRepository
@@ -26,8 +26,7 @@ class VisitorRepository(BaseRepository[Visitor]):
         """Страница посетителей с поиском по ФИО и фильтром блокировки."""
         conditions = []
         if search:
-            pattern = f"%{search}%"
-            conditions.append(or_(Visitor.full_name.ilike(pattern)))
+            conditions.append(Visitor.full_name.ilike(f"%{search}%"))
         if is_blocked is not None:
             conditions.append(Visitor.is_blocked == is_blocked)
 

@@ -5,13 +5,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from app.domain.models import (
-    CategoryManager,
-    Object,
-    ObjectManager,
-    Request,
-    RequestStatus,
-)
+from app.domain.models import Request, RequestStatus
 from app.repository.base import BaseRepository
 
 
@@ -67,19 +61,3 @@ class RequestRepository(BaseRepository[Request]):
         items = (await self.session.scalars(stmt.limit(limit).offset(offset))).all()
         total = await self.count(*conditions)
         return items, total
-
-    async def list_manager_object_ids(self, user_id: int) -> list[int]:
-        """Id объектов, доступных менеджеру: прямые связи (object_managers)
-        ∪ объекты категорий менеджера (category_managers)."""
-        direct = await self.session.scalars(
-            select(ObjectManager.object_id).where(ObjectManager.user_id == user_id)
-        )
-        via_category = await self.session.scalars(
-            select(Object.id)
-            .join(
-                CategoryManager,
-                CategoryManager.category_id == Object.category_id,
-            )
-            .where(CategoryManager.user_id == user_id)
-        )
-        return sorted(set(direct) | set(via_category))

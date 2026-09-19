@@ -2,14 +2,17 @@
 
 from collections.abc import Sequence
 
-from sqlalchemy import asc, select
+from sqlalchemy import asc
 
 from app.domain.models import Category, CategoryManager
 from app.repository.base import BaseRepository
+from app.repository.manager_link import ManagerLinkMixin, link_entity
 
 
-class CategoryRepository(BaseRepository[Category]):
+class CategoryRepository(BaseRepository[Category], ManagerLinkMixin):
     model = Category
+    link_model = CategoryManager
+    link_entity_attr = link_entity(CategoryManager.category_id)
 
     async def list_active(
         self, *, limit: int | None = None, offset: int = 0
@@ -21,31 +24,3 @@ class CategoryRepository(BaseRepository[Category]):
             offset=offset,
             order_by=asc(Category.sort_order),
         )
-
-    async def add_manager(self, category_id: int, user_id: int) -> CategoryManager:
-        """Назначить менеджера на категорию."""
-        link = CategoryManager(category_id=category_id, user_id=user_id)
-        self.session.add(link)
-        return link
-
-    async def remove_manager(self, category_id: int, user_id: int) -> None:
-        """Снять менеджера с категории."""
-        link = (
-            await self.session.scalars(
-                select(CategoryManager).where(
-                    CategoryManager.category_id == category_id,
-                    CategoryManager.user_id == user_id,
-                )
-            )
-        ).first()
-        if link is not None:
-            await self.session.delete(link)
-
-    async def list_manager_ids(self, category_id: int) -> list[int]:
-        """Id менеджеров, назначенных на категорию."""
-        links = await self.session.scalars(
-            select(CategoryManager.user_id).where(
-                CategoryManager.category_id == category_id
-            )
-        )
-        return list(links)

@@ -6,10 +6,19 @@ from sqlalchemy import asc, select
 
 from app.domain.models import CategoryManager, Object, ObjectManager
 from app.repository.base import BaseRepository
+from app.repository.manager_link import ManagerLinkMixin, link_entity
 
 
-class ObjectRepository(BaseRepository[Object]):
+class ObjectRepository(BaseRepository[Object], ManagerLinkMixin):
+    """Объекты (CRUD) + связи с менеджерами (mixin).
+
+    Методы доступа менеджеров (прямые ∪ через категорию) — единственная
+    точка этой логики (используется API и ботом).
+    """
+
     model = Object
+    link_model = ObjectManager
+    link_entity_attr = link_entity(ObjectManager.object_id)
 
     async def list_by_category(
         self,
@@ -30,41 +39,6 @@ class ObjectRepository(BaseRepository[Object]):
             order_by=asc(Object.sort_order),
         )
 
-    async def get_with_managers(self, pk: int) -> Object | None:
-        """Объект вместе с назначенными менеджерами."""
-        obj = await self.get(pk)
-        if obj is not None:
-            await self.session.refresh(obj, ["managers"])
-        return obj
-
-    async def add_manager(self, object_id: int, user_id: int) -> ObjectManager:
-        """Назначить менеджера на объект."""
-        link = ObjectManager(object_id=object_id, user_id=user_id)
-        self.session.add(link)
-        return link
-
-    async def remove_manager(self, object_id: int, user_id: int) -> None:
-        """Снять менеджера с объекта."""
-        # ВАЖНО: не self.find_one() — он ищет self.model (Object),
-        # а здесь нужна связь ObjectManager
-        link = (
-            await self.session.scalars(
-                select(ObjectManager).where(
-                    ObjectManager.object_id == object_id,
-                    ObjectManager.user_id == user_id,
-                )
-            )
-        ).first()
-        if link is not None:
-            await self.session.delete(link)
-
-    async def list_manager_ids(self, object_id: int) -> list[int]:
-        """Id менеджеров, назначенных на объект напрямую (object_managers)."""
-        links = await self.session.scalars(
-            select(ObjectManager.user_id).where(ObjectManager.object_id == object_id)
-        )
-        return list(links)
-
     async def list_access_manager_ids(self, object_id: int) -> list[int]:
         """Id менеджеров с доступом к объекту: прямые связи ∪ менеджеры
         категории объекта (доступ через категорию)."""
@@ -80,5 +54,21 @@ class ObjectRepository(BaseRepository[Object]):
             select(CategoryManager.user_id).where(
                 CategoryManager.category_id == obj.category_id
             )
+        )
+        return sorted(set(direct) | set(via_category))
+
+    async def list_manager_object_ids(self, user_id: int) -> list[int]:
+        """Id объектов, доступных менеджеру: прямые связи (object_managers)
+        ∪ объекты категорий менеджера (category_managers)."""
+        direct = await self.session.scalars(
+            select(ObjectManager.object_id).where(ObjectManager.user_id == user_id)
+        )
+        via_category = await self.session.scalars(
+            select(Object.id)
+            .join(
+                CategoryManager,
+                CategoryManager.category_id == Object.category_id,
+            )
+            .where(CategoryManager.user_id == user_id)
         )
         return sorted(set(direct) | set(via_category))

@@ -11,8 +11,11 @@ services:
     image: ubc-app:latest
     container_name: ubc-backend
     restart: unless-stopped
+    # --proxy-headers: uvicorn берёт реальный IP клиента из X-Forwarded-For
+    # (проставляет nginx) — нужен для rate-limit логина; порт published только
+    # на 127.0.0.1, поэтому доверяем всем источникам заголовка внутри хоста
     command: >
-      sh -c "uvicorn src.app.api.main:app --host 0.0.0.0 --port ${BACKEND_PORT} ${BACKEND_CONTAINER_COMMAND}"
+      sh -c "uvicorn src.app.api.main:app --host 0.0.0.0 --port ${BACKEND_PORT} --proxy-headers --forwarded-allow-ips='*' ${BACKEND_CONTAINER_COMMAND}"
     env_file:
       - .env
     environment:

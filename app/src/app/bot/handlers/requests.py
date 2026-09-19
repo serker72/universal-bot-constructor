@@ -15,16 +15,10 @@ from app.bot.keyboards import (
 )
 from app.bot.services import BotService, BotServiceError
 from app.bot.states import RequestStates
+from app.bot.statuses import STATUS_TEXT
+from app.bot.handlers.menu import ensure_visitor
 
 router = Router(name="requests")
-
-STATUS_TEXT = {
-    "new": "🆕 Новая",
-    "approved": "✅ Подтверждена",
-    "rejected": "❌ Отклонена",
-    "completed": "🏁 Выполнена",
-    "cancelled_by_customer": "🚫 Отменена вами",
-}
 
 
 # -- создание заявки (диалог aiogram-dialog) ---------------------------------
@@ -38,12 +32,7 @@ async def start_request(
     bot_service: FromDishka[BotService],
 ) -> None:
     """Кнопка «Создать заявку»: запуск диалога с флагами из настроек."""
-    visitor = await bot_service.get_visitor(callback.from_user.id)
-    if visitor is None:
-        await callback.answer("Сначала завершите регистрацию (/start)", show_alert=True)
-        return
-    if visitor.is_blocked:
-        await callback.answer("Вы заблокированы", show_alert=True)
+    if not await ensure_visitor(callback, bot_service):
         return
     use_time = await bot_service.app_settings.get_is_use_time_in_request()
     use_end_date = await bot_service.app_settings.get_is_use_end_date_in_request()
@@ -71,10 +60,9 @@ async def show_my_requests(
     bot_service: FromDishka[BotService],
 ) -> None:
     """Список заявок посетителя (с пагинацией)."""
-    visitor = await bot_service.get_visitor(callback.from_user.id)
-    if visitor is None:
-        await callback.answer("Сначала завершите регистрацию (/start)", show_alert=True)
+    if not await ensure_visitor(callback, bot_service):
         return
+    visitor = await bot_service.get_visitor(callback.from_user.id)
     items, pages = await bot_service.list_visitor_requests(
         visitor.id, page=callback_data.page
     )
@@ -98,10 +86,9 @@ async def cancel_request(
     bot_service: FromDishka[BotService],
 ) -> None:
     """Отмена заявки (new — всегда, approved — в пределах интервала)."""
-    visitor = await bot_service.get_visitor(callback.from_user.id)
-    if visitor is None:
-        await callback.answer("Нет доступа", show_alert=True)
+    if not await ensure_visitor(callback, bot_service):
         return
+    visitor = await bot_service.get_visitor(callback.from_user.id)
     req = await bot_service.get_request(callback_data.request_id, visitor.id)  # type: ignore[arg-type]
     if req is None:
         await callback.answer("Заявка не найдена", show_alert=True)
@@ -125,10 +112,9 @@ async def show_request_details(
     bot_service: FromDishka[BotService],
 ) -> None:
     """Карточка заявки: статус, телефон, комментарий, кнопка отмены."""
-    visitor = await bot_service.get_visitor(callback.from_user.id)
-    if visitor is None:
-        await callback.answer("Нет доступа", show_alert=True)
+    if not await ensure_visitor(callback, bot_service):
         return
+    visitor = await bot_service.get_visitor(callback.from_user.id)
     req = await bot_service.get_request(callback_data.request_id, visitor.id)  # type: ignore[arg-type]
     if req is None:
         await callback.answer("Заявка не найдена", show_alert=True)

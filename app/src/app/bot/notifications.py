@@ -12,6 +12,8 @@
 Если у пользователя не указан telegram_id — уведомление пропускается.
 """
 
+import asyncio
+
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from dishka import AsyncContainer
@@ -27,45 +29,42 @@ from app.services.events import (
     RequestStatusChangedEvent,
     VisitorRegisteredEvent,
 )
-
-# Тексты статусов заявки для посетителя
-STATUS_TEXT = {
-    "approved": "✅ Ваша заявка #{request_id} подтверждена менеджером.",
-    "rejected": "❌ Ваша заявка #{request_id} отклонена менеджером.",
-    "completed": "🏁 Заявка #{request_id} выполнена. Спасибо за обращение!",
-}
+from app.bot.statuses import STATUS_NOTIFY_TEXT
 
 log = get_logger(__name__)
+
+# Параллельность отправки (aiogram сам следит за лимитами Telegram)
+SEND_CONCURRENCY = 10
 
 
 def register_notification_consumers(
     broker: RabbitBroker, container: AsyncContainer, settings: Settings
 ) -> None:
     """Зарегистрировать подписчиков уведомлений на брокере (до broker.start())."""
-    queues = (
-        RabbitQueue(
+    queues = {
+        "registration": RabbitQueue(
             name=settings.consumer.queue_registration,
             durable=True,
             routing_key=settings.consumer.routing_registration,
         ),
-        RabbitQueue(
+        "request_created": RabbitQueue(
             name=settings.consumer.queue_request_created,
             durable=True,
             routing_key=settings.consumer.routing_request_created,
         ),
-        RabbitQueue(
+        "request_cancelled": RabbitQueue(
             name=settings.consumer.queue_request_cancelled,
             durable=True,
             routing_key=settings.consumer.routing_request_cancelled,
         ),
-        RabbitQueue(
+        "request_status": RabbitQueue(
             name=settings.consumer.queue_request_status,
             durable=True,
             routing_key=settings.consumer.routing_request_status,
         ),
-    )
+    }
 
-    @broker.subscriber(queues[0])
+    @broker.subscriber(queues["registration"])
     async def on_visitor_registered(event: VisitorRegisteredEvent) -> None:
         """Новая регистрация посетителя → уведомление админам."""
         bot = await container.get(Bot)
@@ -76,25 +75,25 @@ def register_notification_consumers(
         )
         await _notify_role(container, bot, UserRole.ADMIN, text)
 
-    @broker.subscriber(queues[1])
+    @broker.subscriber(queues["request_created"])
     async def on_request_created(event: RequestCreatedEvent) -> None:
         """Новая заявка → уведомление менеджерам объекта."""
         bot = await container.get(Bot)
         text = f"📝 Новая заявка #{event.request_id} на объект «{event.object_name}»."
         await _notify_users(container, bot, event.manager_ids, text)
 
-    @broker.subscriber(queues[2])
+    @broker.subscriber(queues["request_cancelled"])
     async def on_request_cancelled(event: RequestCancelledEvent) -> None:
         """Отмена заявки → уведомление менеджерам объекта."""
         bot = await container.get(Bot)
         text = f"🚫 Заявка #{event.request_id} отменена посетителем."
         await _notify_users(container, bot, event.manager_ids, text)
 
-    @broker.subscriber(queues[3])
+    @broker.subscriber(queues["request_status"])
     async def on_request_status_changed(event: RequestStatusChangedEvent) -> None:
         """Смена статуса заявки менеджером → уведомление посетителю."""
         bot = await container.get(Bot)
-        template = STATUS_TEXT.get(event.status)
+        template = STATUS_NOTIFY_TEXT.get(event.status)
         if template is None:
             return
         try:
@@ -133,9 +132,19 @@ async def _notify_users(
 
 
 async def _send_all(bot: Bot, chat_ids: list[int], text: str) -> None:
-    """Отправка сообщений: ошибки по одному чату не прерывают рассылку."""
-    for chat_id in chat_ids:
-        try:
-            await bot.send_message(chat_id, text)
-        except TelegramAPIError:
-            log.warning("notify_send_failed", chat_id=chat_id)
+    """Отправка сообщений параллельно (семафор по лимитам Telegram).
+
+    Ошибки по одному чату не прерывают рассылку.
+    """
+    if not chat_ids:
+        return
+    semaphore = asyncio.Semaphore(SEND_CONCURRENCY)
+
+    async def _send(chat_id: int) -> None:
+        async with semaphore:
+            try:
+                await bot.send_message(chat_id, text)
+            except TelegramAPIError:
+                log.warning("notify_send_failed", chat_id=chat_id)
+
+    await asyncio.gather(*(_send(chat_id) for chat_id in chat_ids))

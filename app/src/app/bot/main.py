@@ -38,7 +38,9 @@ async def _run_webhook(settings: Settings, bot: Bot, dp: Dispatcher) -> None:
 
     url = settings.bot.webhook_base_url.rstrip("/") + settings.bot.webhook_path
     secret = settings.bot.webhook_secret or None
-    await bot.set_webhook(url, secret_token=secret, drop_pending_updates=True)
+    # drop_pending_updates не передаём: рестарт контейнера не должен
+    # терять апдейты пользователей (регистрации, нажатия кнопок)
+    await bot.set_webhook(url, secret_token=secret)
     logger.info("webhook_set", url=url)
 
     app = web.Application()

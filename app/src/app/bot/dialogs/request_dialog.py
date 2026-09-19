@@ -335,23 +335,34 @@ async def finalize_and_create(manager: DialogManager):
 HOURS = generate_hours()
 MINUTES = generate_minutes()
 
-# Календарь заявки: неделя с понедельника, даты не в прошлом и не далее +2 лет
-_CALENDAR_CONFIG = CalendarConfig(
-    firstweekday=0,
-    min_date=date.today(),
-    max_date=date.today().replace(year=date.today().year + 2),
-)
+# Календарь заявки: неделя с понедельника, даты не в прошлом и не далее +2 лет.
+# CalendarConfig создаётся на каждый рендер (геттер): date.today() при импорте
+# модуля устаревала бы при долгой работе процесса бота.
+def _calendar_config() -> CalendarConfig:
+    """Конфиг календаря: от сегодня до +2 лет (вычисляется на каждый рендер)."""
+    today = date.today()
+    return CalendarConfig(
+        firstweekday=0,
+        min_date=today,
+        max_date=today.replace(year=today.year + 2),
+    )
+
+
+async def _calendar_getter(**kwargs) -> dict:
+    """Геттер окна с датами: свежий CalendarConfig на каждый рендер."""
+    return {"calendar_config": _calendar_config()}
+
 
 _START_CALENDAR_WIDGET = RuCalendar(
     id="cal_start_date",
     on_click=on_start_date_selected,
-    config=_CALENDAR_CONFIG,
+    config=_calendar_config(),
 )
 
 _END_CALENDAR_WIDGET = RuCalendar(
     id="cal_end_date",
     on_click=on_end_date_selected,
-    config=_CALENDAR_CONFIG,
+    config=_calendar_config(),
 )
 
 _HOURS_ROW = ScrollingGroup(
@@ -431,6 +442,7 @@ dialog = Dialog(
         Const("📅 Выберите дату начала:"),
         _START_CALENDAR_WIDGET,
         SwitchTo(BACK_TEXT, id="back_phone", state=RequestStates.input_phone),
+        getter=_calendar_getter,
         state=RequestStates.start_date,
     ),
     # -- Окно 3: час начала ---------------------------------------------------
@@ -458,6 +470,7 @@ dialog = Dialog(
             id="back_end_date",
             on_click=on_back_from_end_date,
         ),
+        getter=_calendar_getter,
         state=RequestStates.end_date,
     ),
     # -- Окно 6: час окончания --------------------------------------------------

@@ -1,6 +1,7 @@
 """Хендлеры меню: категории → объекты → страница объекта → PDF."""
 
 from aiogram import F, Router
+from aiogram import html
 from aiogram.types import CallbackQuery
 from aiogram.types import FSInputFile
 from dishka.integrations.aiogram import FromDishka
@@ -122,7 +123,7 @@ async def show_object(
     if obj is None:
         await callback.answer("Объект не найден", show_alert=True)
         return
-    text = f"<b>{obj.name}</b>\n\n{obj.short_description or 'Описание отсутствует.'}"
+    text = f"<b>{html.quote(obj.name)}</b>\n\n{html.quote(obj.short_description or 'Описание отсутствует.')}"
     await callback.message.edit_text(  # type: ignore[union-attr]
         text,
         reply_markup=object_keyboard(obj.category_id, obj.id),

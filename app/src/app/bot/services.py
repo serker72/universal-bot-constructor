@@ -1,6 +1,5 @@
 """Сервис бота: регистрация посетителей, меню, заявки, отмена."""
 
-import re
 from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,8 +11,6 @@ from app.repository.request import RequestRepository
 from app.repository.visitor import VisitorRepository
 from app.services.app_settings import AppSettingsService
 from app.services.events import EventPublisher, RequestCancelledEvent, RequestCreatedEvent, VisitorRegisteredEvent
-
-PHONE_RE = re.compile(r"^\+?[0-9]{10,15}$")
 
 
 class BotServiceError(Exception):

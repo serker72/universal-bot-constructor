@@ -9,13 +9,7 @@ from aiogram import types
 from aiogram.filters.callback_data import CallbackData
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-STATUS_EMOJI = {
-    "new": "🆕",
-    "approved": "✅",
-    "rejected": "❌",
-    "completed": "🏁",
-    "cancelled_by_customer": "🚫",
-}
+from app.bot.statuses import STATUS_EMOJI
 
 
 class CategoryCB(CallbackData, prefix="cat"):

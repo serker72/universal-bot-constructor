@@ -172,7 +172,7 @@ async function setStatus(req: Req, status: string) {
   try {
     await api(`/requests/${req.id}/status`, { method: 'POST', body: { status } })
     await load()
-  } catch {
+  } catch (err) {
     alert('Не удалось изменить статус заявки')
   }
 }
@@ -182,8 +182,8 @@ onMounted(async () => {
   try {
     const p = await page<Obj>('/objects', { limit: 1000 })
     objects.value = p.items
-  } catch {
-    /* фильтр по объекту не критичен */
+  } catch (err) {
+    console.warn('[requests] objects load failed', err)
   }
 })
 </script>

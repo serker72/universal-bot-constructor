@@ -166,7 +166,8 @@ async function save() {
     }
     modal.value = false
     await load()
-  } catch {
+  } catch (err) {
+    console.warn('[users] save failed', err)
     formError.value = 'Не удалось сохранить пользователя (имя занято? пароль от 8 символов?)'
   } finally {
     saving.value = false
@@ -178,7 +179,8 @@ async function remove(u: User) {
   try {
     await api(`/users/${u.id}`, { method: 'DELETE' })
     await load()
-  } catch {
+  } catch (err) {
+    console.warn('[users] delete failed', err)
     alert('Не удалось удалить пользователя')
   }
 }

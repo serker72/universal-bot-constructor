@@ -112,7 +112,7 @@ async function revoke(s: Session) {
   try {
     await api(`/sessions/${s.id}/revoke`, { method: 'POST' })
     await load()
-  } catch {
+  } catch (err) {
     alert('Не удалось отозвать сессию')
   }
 }
@@ -122,7 +122,7 @@ async function revokeAll() {
   try {
     await api(`/sessions/users/${userId.value}/revoke-all`, { method: 'POST' })
     await load()
-  } catch {
+  } catch (err) {
     alert('Не удалось отозвать сессии')
   }
 }
@@ -132,8 +132,8 @@ onMounted(async () => {
   try {
     const p = await page<User>('/users', { limit: 1000 })
     users.value = p.items
-  } catch {
-    /* фильтр не критичен */
+  } catch (err) {
+    console.warn('[sessions] users load failed', err)
   }
 })
 </script>

@@ -88,8 +88,8 @@ onMounted(async () => {
   try {
     const p = await page<User>('/users', { limit: 1000 })
     users.value = p.items
-  } catch {
-    /* фильтр не критичен */
+  } catch (err) {
+    console.warn('[devices] users load failed', err)
   }
 })
 </script>

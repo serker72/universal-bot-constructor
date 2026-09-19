@@ -101,7 +101,8 @@ async function ban(v: Visitor) {
   try {
     await api(`/visitors/${v.id}/ban`, { method: 'POST' })
     await load()
-  } catch {
+  } catch (err) {
+    console.warn('[visitors] ban failed', err)
     alert('Не удалось заблокировать посетителя')
   }
 }
@@ -110,7 +111,8 @@ async function unban(v: Visitor) {
   try {
     await api(`/visitors/${v.id}/unban`, { method: 'POST' })
     await load()
-  } catch {
+  } catch (err) {
+    console.warn('[visitors] unban failed', err)
     alert('Не удалось разблокировать посетителя')
   }
 }

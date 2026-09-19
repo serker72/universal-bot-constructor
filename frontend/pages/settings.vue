@@ -94,7 +94,8 @@ async function save() {
     apply(out.settings)
     saved.value = true
     message.value = 'Настройки сохранены'
-  } catch {
+  } catch (err) {
+    console.warn('[settings] save failed', err)
     saved.value = false
     message.value = 'Не удалось сохранить настройки'
   } finally {
@@ -106,7 +107,8 @@ onMounted(async () => {
   try {
     const out = await api<{ settings: Record<string, string> }>('/settings')
     apply(out.settings)
-  } catch {
+  } catch (err) {
+    console.warn('[settings] load failed', err)
     loadError.value = true
   }
 })

@@ -67,8 +67,8 @@ onMounted(async () => {
     try {
       const p = await page<Record<string, unknown>>(url, { limit: 1 })
       counts.value[key] = p.total
-    } catch {
-      /* дашборд не критичен */
+    } catch (err) {
+      console.warn('[dashboard] stats load failed', err)
     }
   }
   await Promise.all([

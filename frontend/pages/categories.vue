@@ -96,14 +96,9 @@ interface Category {
   sort_order: number
   is_active: boolean
 }
-interface Manager {
-  id: number
-  username: string
-  role: 'admin' | 'manager'
-  is_active: boolean
-}
 
 const { api, page } = useApi()
+const { managers, loadManagers } = useManagers()
 
 const items = ref<Category[]>([])
 const total = ref(0)
@@ -115,7 +110,6 @@ const formError = ref('')
 const form = ref({ id: 0, name: '', sort_order: 0, is_active: true })
 
 const managersModal = ref(false)
-const managers = ref<Manager[]>([])
 const selectedManagers = ref<number[]>([])
 const managersSaving = ref(false)
 const managersError = ref('')
@@ -161,6 +155,7 @@ async function save() {
     modal.value = false
     await load()
   } catch (err) {
+    console.warn('[categories] save failed', err)
     formError.value = 'Не удалось сохранить категорию'
   } finally {
     saving.value = false
@@ -172,7 +167,8 @@ async function remove(cat: Category) {
   try {
     await api(`/categories/${cat.id}`, { method: 'DELETE' })
     await load()
-  } catch {
+  } catch (err) {
+    console.warn('[categories] delete failed', err)
     alert('Не удалось удалить категорию')
   }
 }
@@ -184,7 +180,8 @@ async function openManagers(cat: Category) {
   try {
     const out = await api<{ category_id: number; user_ids: number[] }>(`/categories/${cat.id}/managers`)
     selectedManagers.value = [...out.user_ids]
-  } catch {
+  } catch (err) {
+    console.warn('[categories] managers load failed', err)
     managersError.value = 'Не удалось загрузить менеджеров'
   }
 }
@@ -198,7 +195,8 @@ async function saveManagers() {
       body: { user_ids: selectedManagers.value },
     })
     managersModal.value = false
-  } catch {
+  } catch (err) {
+    console.warn('[categories] managers save failed', err)
     managersError.value = 'Не удалось сохранить менеджеров'
   } finally {
     managersSaving.value = false
@@ -206,13 +204,7 @@ async function saveManagers() {
 }
 
 onMounted(async () => {
-  // менеджеры для модалки назначения
-  try {
-    const p = await page<Manager>('/users', { limit: 1000 })
-    managers.value = p.items.filter((u) => u.role === 'manager' && u.is_active)
-  } catch {
-    /* не критично */
-  }
+  await loadManagers()
 })
 
 await load()

@@ -155,14 +155,10 @@ interface Obj {
   is_active: boolean
   has_pdf: boolean
 }
-interface Manager {
-  id: number
-  username: string
-  role: 'admin' | 'manager'
-  is_active: boolean
-}
+// тип менеджера приходит из composable useManagers
 
 const { api, page, baseURL } = useApi()
+const { managers, loadManagers } = useManagers()
 
 const categories = ref<Category[]>([])
 const items = ref<Obj[]>([])
@@ -179,7 +175,6 @@ const pdfFile = ref<File | null>(null)
 const form = ref({ id: 0, category_id: 0, name: '', short_description: '', sort_order: 0, is_active: true })
 
 const managersModal = ref(false)
-const managers = ref<Manager[]>([])
 const selectedManagers = ref<number[]>([])
 const managersSaving = ref(false)
 const managersError = ref('')
@@ -249,7 +244,8 @@ async function save() {
     }
     modal.value = false
     await load()
-  } catch {
+  } catch (err) {
+    console.warn('[objects] save failed', err)
     formError.value = 'Не удалось сохранить объект (проверьте PDF: только PDF, до 20 МБ)'
   } finally {
     saving.value = false
@@ -267,7 +263,8 @@ async function uploadPdf() {
     pdfFile.value = null
     await load()
     modal.value = false
-  } catch {
+  } catch (err) {
+    console.warn('[objects] pdf upload failed', err)
     formError.value = 'Не удалось загрузить PDF (только PDF, до 20 МБ)'
   } finally {
     uploading.value = false
@@ -286,7 +283,8 @@ async function openManagers(obj: Obj) {
   try {
     const out = await api<{ object_id: number; user_ids: number[] }>(`/objects/${obj.id}/managers`)
     selectedManagers.value = [...out.user_ids]
-  } catch {
+  } catch (err) {
+    console.warn('[objects] managers load failed', err)
     managersError.value = 'Не удалось загрузить менеджеров'
   }
 }
@@ -300,7 +298,8 @@ async function saveManagers() {
       body: { user_ids: selectedManagers.value },
     })
     managersModal.value = false
-  } catch {
+  } catch (err) {
+    console.warn('[objects] managers save failed', err)
     managersError.value = 'Не удалось сохранить менеджеров'
   } finally {
     managersSaving.value = false
@@ -312,7 +311,8 @@ async function remove(obj: Obj) {
   try {
     await api(`/objects/${obj.id}`, { method: 'DELETE' })
     await load()
-  } catch {
+  } catch (err) {
+    console.warn('[objects] delete failed', err)
     alert('Не удалось удалить объект')
   }
 }
@@ -321,16 +321,11 @@ onMounted(async () => {
   try {
     const p = await page<Category>('/categories', { limit: 1000 })
     categories.value = p.items
-  } catch {
-    /* категории нужны для фильтра/формы */
+  } catch (err) {
+    // категории нужны для фильтра/формы
+    console.warn('[objects] failed to load categories', err)
   }
   await load()
-  // менеджеры для модалки назначения
-  try {
-    const p = await page<Manager>('/users', { limit: 1000 })
-    managers.value = p.items.filter((u) => u.role === 'manager' && u.is_active)
-  } catch {
-    /* не критично */
-  }
+  await loadManagers()
 })
 </script>

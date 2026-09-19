@@ -39,6 +39,22 @@ export function useAuth() {
     persist()
   }
 
+  /** Сверить сохранённого пользователя с сервером (роль — источник истины) */
+  async function fetchMe(): Promise<void> {
+    if (!user.value) return
+    const { api } = useApi()
+    try {
+      const u = await api<AuthUser>('/auth/me')
+      // роль могла измениться админом — обновляем локальную копию
+      if (u.role !== user.value.role || u.username !== user.value.username) {
+        user.value = u
+        persist()
+      }
+    } catch {
+      // 401 и т.п. — api() сам сделает refresh/redirect
+    }
+  }
+
   async function logout(): Promise<void> {
     try {
       const { api } = useApi()
@@ -55,5 +71,5 @@ export function useAuth() {
     persist()
   }
 
-  return { user, isAdmin, isAuthenticated, login, logout, reset }
+  return { user, isAdmin, isAuthenticated, login, logout, reset, fetchMe }
 }

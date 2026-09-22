@@ -78,6 +78,7 @@ const adminMenu = [
   { to: '/dashboard', label: 'Дашборд', icon: 'dashboard' },
   { to: '/categories', label: 'Категории', icon: 'folder' },
   { to: '/objects', label: 'Объекты', icon: 'cube' },
+  { to: '/fields', label: 'Поля заявки', icon: 'clipboard' },
   { to: '/requests', label: 'Заявки', icon: 'clipboard' },
   { to: '/users', label: 'Пользователи', icon: 'users' },
   { to: '/visitors', label: 'Посетители', icon: 'visitor' },

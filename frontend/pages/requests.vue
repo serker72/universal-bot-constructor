@@ -42,9 +42,7 @@
             <th class="w-20">№</th>
             <th>Объект</th>
             <th>Телефон</th>
-            <th>Начало</th>
-            <th>Окончание</th>
-            <th>Комментарий</th>
+            <th>Поля заявки</th>
             <th>Статус</th>
             <th>Создана</th>
             <th class="w-56">Действия</th>
@@ -55,9 +53,20 @@
             <td>#{{ req.id }}</td>
             <td>{{ objectName(req.object_id) }}</td>
             <td class="whitespace-nowrap">{{ req.phone }}</td>
-            <td class="whitespace-nowrap">{{ formatStart(req) }}</td>
-            <td class="whitespace-nowrap">{{ formatEnd(req) }}</td>
-            <td class="max-w-56 truncate" :title="req.comment ?? ''">{{ req.comment || '—' }}</td>
+            <td class="max-w-72">
+              <template v-if="req.fields.length">
+                <div
+                  v-for="f in req.fields"
+                  :key="f.field_id"
+                  class="text-sm"
+                  :title="`${f.field_label}: ${f.value ?? '—'}`"
+                >
+                  <span class="text-gray-500">{{ f.field_label }}:</span>
+                  {{ f.value || '—' }}
+                </div>
+              </template>
+              <span v-else class="text-gray-400">—</span>
+            </td>
             <td><StatusBadge :status="req.status" /></td>
             <td class="whitespace-nowrap">{{ formatDateTime(req.created_at) }}</td>
             <td class="space-x-2 whitespace-nowrap">
@@ -76,7 +85,7 @@
             </td>
           </tr>
           <tr v-if="!items.length">
-            <td colspan="9" class="py-6 text-center text-gray-400">Заявок нет</td>
+            <td colspan="7" class="py-6 text-center text-gray-400">Заявок нет</td>
           </tr>
         </tbody>
       </table>
@@ -88,16 +97,18 @@
 </template>
 
 <script setup lang="ts">
+interface ReqField {
+  field_id: number
+  field_code: string
+  field_label: string
+  value: string | null
+}
 interface Req {
   id: number
   visitor_id: number
   object_id: number
   phone: string
-  comment: string | null
-  start_date: string | null
-  start_time: string | null
-  end_date: string | null
-  end_time: string | null
+  fields: ReqField[]
   status: string
   confirmed_at: string | null
   created_at: string
@@ -120,21 +131,6 @@ const filters = ref({ status: '', objectId: '', dateFrom: '', dateTo: '' })
 
 function objectName(id: number): string {
   return objects.value.find((o) => o.id === id)?.name ?? `#${id}`
-}
-
-/** Дата + время из заявки в формате ДД.ММ.ГГГГ ЧЧ:ММ (или «—») */
-function formatPeriod(d: string | null, t: string | null): string {
-  if (!d) return '—'
-  const date = d.slice(0, 10).split('-').reverse().join('.')
-  return t ? `${date} ${t.slice(0, 5)}` : date
-}
-
-function formatStart(req: Req): string {
-  return formatPeriod(req.start_date, req.start_time)
-}
-
-function formatEnd(req: Req): string {
-  return formatPeriod(req.end_date, req.end_time)
 }
 
 /** Обработка доступна только менеджеру объекта: new → approved/rejected, approved → completed */

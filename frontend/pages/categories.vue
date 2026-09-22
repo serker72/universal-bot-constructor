@@ -27,6 +27,7 @@
             <td class="space-x-2 whitespace-nowrap">
               <button class="btn-secondary" @click="openEdit(cat)">Изменить</button>
               <button class="btn-secondary" @click="openManagers(cat)">Менеджеры</button>
+              <button class="btn-secondary" @click="openFields(cat)">Поля заявки</button>
               <button class="btn-danger" @click="remove(cat)">Удалить</button>
             </td>
           </tr>
@@ -86,6 +87,49 @@
         </button>
       </div>
     </UiModal>
+    <!-- Состав полей заявки категории -->
+    <UiModal :open="fieldsModal" title="Поля заявки категории" @close="fieldsModal = false">
+      <p class="mb-3 text-sm text-gray-500">
+        Поля формы заявки для объектов этой категории (порядок = порядок в диалоге бота).
+      </p>
+      <p v-if="!fieldsAll.length" class="mb-3 text-sm text-gray-500">
+        Справочник полей пуст — добавьте поля на странице «Поля заявки».
+      </p>
+      <div class="mb-4 max-h-80 space-y-2 overflow-y-auto">
+        <div
+          v-for="(row, i) in fieldsRows"
+          :key="row.field.id"
+          class="flex items-center gap-2 text-sm"
+        >
+          <input
+            :checked="row.selected"
+            type="checkbox"
+            class="h-4 w-4"
+            @change="row.selected = !row.selected"
+          />
+          <span class="w-6 text-gray-400">{{ i + 1 }}.</span>
+          <span class="flex-1">{{ row.field.label }} ({{ row.field.code }})</span>
+          <input
+            v-model.number="row.sort_order"
+            class="input w-20"
+            type="number"
+            min="0"
+            placeholder="№"
+          />
+          <label class="flex items-center gap-1 text-xs text-gray-500">
+            <input v-model="row.is_required" type="checkbox" class="h-4 w-4" />
+            обяз.
+          </label>
+        </div>
+      </div>
+      <p v-if="fieldsError" class="mb-2 text-sm text-red-600">{{ fieldsError }}</p>
+      <div class="flex justify-end gap-2">
+        <button class="btn-secondary" type="button" @click="fieldsModal = false">Отмена</button>
+        <button class="btn-primary" type="button" :disabled="fieldsSaving" @click="saveFields">
+          Сохранить
+        </button>
+      </div>
+    </UiModal>
   </div>
 </template>
 
@@ -114,6 +158,82 @@ const selectedManagers = ref<number[]>([])
 const managersSaving = ref(false)
 const managersError = ref('')
 const managersCategoryId = ref(0)
+
+// -- поля заявки категории --------------------------------------------------
+interface ReqField {
+  id: number
+  code: string
+  type: string
+  label: string
+  is_required_default: boolean
+  meta_data: Record<string, unknown> | null
+}
+interface FieldRow {
+  field: ReqField
+  selected: boolean
+  sort_order: number
+  is_required: boolean
+}
+
+const fieldsModal = ref(false)
+const fieldsAll = ref<ReqField[]>([])
+const fieldsRows = ref<FieldRow[]>([])
+const fieldsSaving = ref(false)
+const fieldsError = ref('')
+const fieldsCategoryId = ref(0)
+
+async function openFields(cat: Category) {
+  fieldsCategoryId.value = cat.id
+  fieldsError.value = ''
+  fieldsModal.value = true
+  try {
+    if (!fieldsAll.value.length) {
+      const p = await page<ReqField>('/request-fields', { limit: 1000 })
+      fieldsAll.value = p.items
+    }
+    const out = await api<{
+      category_id: number
+      fields: { field: ReqField; sort_order: number; is_required: boolean }[]
+    }>(`/request-fields/categories/${cat.id}/fields`)
+    const linked = new Map(out.fields.map((f) => [f.field.id, f]))
+    fieldsRows.value = fieldsAll.value.map((f) => {
+      const link = linked.get(f.id)
+      return {
+        field: f,
+        selected: link !== undefined,
+        sort_order: link?.sort_order ?? 0,
+        is_required: link?.is_required ?? f.is_required_default,
+      }
+    })
+  } catch (err) {
+    console.warn('[categories] fields load failed', err)
+    fieldsError.value = 'Не удалось загрузить поля'
+  }
+}
+
+async function saveFields() {
+  fieldsSaving.value = true
+  fieldsError.value = ''
+  try {
+    const fields = fieldsRows.value
+      .filter((r) => r.selected)
+      .map((r) => ({
+        field_id: r.field.id,
+        sort_order: r.sort_order,
+        is_required: r.is_required,
+      }))
+    await api(`/request-fields/categories/${fieldsCategoryId.value}/fields`, {
+      method: 'PUT',
+      body: { fields },
+    })
+    fieldsModal.value = false
+  } catch (err) {
+    console.warn('[categories] fields save failed', err)
+    fieldsError.value = 'Не удалось сохранить поля'
+  } finally {
+    fieldsSaving.value = false
+  }
+}
 
 async function load() {
   const p = await page<Category>('/categories', { limit, offset: offset.value })

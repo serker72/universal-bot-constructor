@@ -23,14 +23,10 @@
         <label class="label" for="st-consent">Текст согласия на обработку персональных данных</label>
         <textarea id="st-consent" v-model="form.consent_text" class="input min-h-24"></textarea>
       </div>
-      <div class="flex items-center gap-2">
-        <input id="st-use-time" v-model="form.use_time" class="checkbox" type="checkbox" />
-        <label class="label" for="st-use-time">Использовать время в заявке (выбор часов и минут)</label>
-      </div>
-      <div class="flex items-center gap-2">
-        <input id="st-use-end-date" v-model="form.use_end_date" class="checkbox" type="checkbox" />
-        <label class="label" for="st-use-end-date">Использовать дату окончания в заявке</label>
-      </div>
+      <p class="text-sm text-gray-500">
+        Состав полей заявки (даты, время, варианты) настраивается по категориям
+        на странице «Поля заявки».
+      </p>
 
       <p v-if="message" :class="saved ? 'text-green-600' : 'text-red-600'" class="text-sm">
         {{ message }}
@@ -52,16 +48,12 @@ const form = ref({
   cancel_hours: '24',
   welcome_text: '',
   consent_text: '',
-  use_time: false,
-  use_end_date: false,
 })
 
 const KEY_PAGE = 'bot.page_size'
 const KEY_CANCEL = 'requests.cancel_interval_hours'
 const KEY_WELCOME = 'bot.welcome_text'
 const KEY_CONSENT = 'bot.consent_text'
-const KEY_USE_TIME = 'requests.is_use_time_in_request'
-const KEY_USE_END_DATE = 'requests.is_use_end_date_in_request'
 
 function apply(settings: Record<string, string>) {
   form.value = {
@@ -69,8 +61,6 @@ function apply(settings: Record<string, string>) {
     cancel_hours: settings[KEY_CANCEL] ?? '24',
     welcome_text: settings[KEY_WELCOME] ?? '',
     consent_text: settings[KEY_CONSENT] ?? '',
-    use_time: (settings[KEY_USE_TIME] ?? 'false').toLowerCase() === 'true',
-    use_end_date: (settings[KEY_USE_END_DATE] ?? 'false').toLowerCase() === 'true',
   }
 }
 
@@ -86,8 +76,6 @@ async function save() {
           [KEY_CANCEL]: form.value.cancel_hours,
           [KEY_WELCOME]: form.value.welcome_text,
           [KEY_CONSENT]: form.value.consent_text,
-          [KEY_USE_TIME]: String(form.value.use_time),
-          [KEY_USE_END_DATE]: String(form.value.use_end_date),
         },
       },
     })

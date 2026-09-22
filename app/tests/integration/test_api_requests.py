@@ -38,19 +38,22 @@ async def test_admin_sees_all_requests(admin_client, request_obj):
     assert item["phone"] == request_obj.phone
 
 
-async def test_request_out_contains_datetime_fields(admin_client, request_obj):
-    """RequestOut отдаёт start/end даты и время."""
+async def test_request_out_contains_field_values(admin_client, request_obj):
+    """RequestOut отдаёт значения динамических полей (fields)."""
     resp = await admin_client.get(f"{API}/requests/{request_obj.id}")
     assert resp.status_code == 200
     item = resp.json()
-    assert item["start_date"] == "2026-10-01"
-    assert item["start_time"] == "14:30:00"
-    assert item["end_date"] == "2026-10-02"
-    assert item["end_time"] == "18:00:00"
+    fields = item["fields"]
+    assert len(fields) == 2
+    by_code = {f["field_code"]: f for f in fields}
+    assert by_code["comment"]["value"] == "Прошу консультацию"
+    assert by_code["comment"]["field_label"] == "Комментарий"
+    assert by_code["delivery_time"]["value"] == "14:30"
+    assert by_code["delivery_time"]["field_label"] == "Время доставки"
 
 
-async def test_request_out_datetime_fields_nullable(admin_client, db, visitor, obj):
-    """Заявка без дат/времени (флаги выключены) — поля null."""
+async def test_request_out_fields_empty(admin_client, db, visitor, obj):
+    """Заявка без значений полей — fields пустой список."""
     from app.domain.models import Request
 
     req = Request(visitor_id=visitor.id, object_id=obj.id, phone="+79991234567")
@@ -59,11 +62,7 @@ async def test_request_out_datetime_fields_nullable(admin_client, db, visitor, o
 
     resp = await admin_client.get(f"{API}/requests/{req.id}")
     assert resp.status_code == 200
-    item = resp.json()
-    assert item["start_date"] is None
-    assert item["start_time"] is None
-    assert item["end_date"] is None
-    assert item["end_time"] is None
+    assert resp.json()["fields"] == []
 
 
 async def test_manager_without_objects_sees_nothing(manager_client, request_obj):

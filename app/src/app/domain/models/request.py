@@ -1,9 +1,9 @@
 """Заявки посетителей на объекты."""
 
 import enum
-from datetime import date, datetime, time
+from datetime import datetime
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, String, Text, Time
+from sqlalchemy import DateTime, Enum, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.base import Base, TimestampMixin
@@ -20,7 +20,12 @@ class RequestStatus(str, enum.Enum):
 
 
 class Request(Base, TimestampMixin):
-    """Заявка посетителя на объект."""
+    """Заявка посетителя на объект.
+
+    Фиксированные поля: посетитель, объект, телефон, статус.
+    Остальные данные — динамические поля (request_fields), состав
+    которых настраивается по категории (request_category_fields).
+    """
 
     __tablename__ = "requests"
 
@@ -36,11 +41,6 @@ class Request(Base, TimestampMixin):
         index=True,
     )
     phone: Mapped[str] = mapped_column(String(32), nullable=False)
-    comment: Mapped[str | None] = mapped_column(Text, nullable=True)
-    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
-    end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     status: Mapped[RequestStatus] = mapped_column(
         Enum(RequestStatus, name="tp_request_status"),
         nullable=False,
@@ -52,3 +52,8 @@ class Request(Base, TimestampMixin):
 
     visitor: Mapped["Visitor"] = relationship()
     object: Mapped["Object"] = relationship()
+    values: Mapped[list["RequestField"]] = relationship(
+        back_populates="request",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )

@@ -4,13 +4,24 @@ from collections.abc import Sequence
 from datetime import datetime
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
-from app.domain.models import Request, RequestStatus
+from app.domain.models import Request, RequestField, RequestStatus
 from app.repository.base import BaseRepository
+
+# Значения динамических полей вместе со справочником поля: сериализация
+# RequestOut обращается к field.code/field.label, ленивая загрузка вне
+# async-контекста даёт MissingGreenlet.
+_WITH_VALUES = selectinload(Request.values).selectinload(RequestField.field)
 
 
 class RequestRepository(BaseRepository[Request]):
     model = Request
+
+    async def get_with_values(self, pk: int) -> Request | None:
+        """Заявка по id со значениями полей (и справочником полей)."""
+        stmt = select(Request).where(Request.id == pk).options(_WITH_VALUES)
+        return (await self.session.scalars(stmt)).first()
 
     async def list_by_visitor(
         self,
@@ -57,7 +68,12 @@ class RequestRepository(BaseRepository[Request]):
         if date_to is not None:
             conditions.append(Request.created_at <= date_to)
 
-        stmt = select(Request).where(*conditions).order_by(Request.created_at.desc())
+        stmt = (
+            select(Request)
+            .where(*conditions)
+            .options(_WITH_VALUES)
+            .order_by(Request.created_at.desc())
+        )
         items = (await self.session.scalars(stmt.limit(limit).offset(offset))).all()
         total = await self.count(*conditions)
         return items, total

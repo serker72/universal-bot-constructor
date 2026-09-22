@@ -1,8 +1,6 @@
 """Интеграционные тесты API системных настроек (только admin)."""
 
 from app.services.app_settings import (
-    KEY_IS_USE_END_DATE_IN_REQUEST,
-    KEY_IS_USE_TIME_IN_REQUEST,
     KEY_PAGE_SIZE,
     KEY_WELCOME_TEXT,
 )
@@ -59,16 +57,16 @@ async def test_update_unknown_key_400(admin_client):
     assert "bot.hack" in resp.json()["detail"]
 
 
-async def test_update_request_flags(admin_client):
-    """Флаги заявки сохраняются и читаются."""
-    payload = {
-        KEY_IS_USE_TIME_IN_REQUEST: "true",
-        KEY_IS_USE_END_DATE_IN_REQUEST: "true",
-    }
-    resp = await admin_client.put(f"{API}/settings", json={"settings": payload})
-    assert resp.status_code == 200
-    assert resp.json()["settings"][KEY_IS_USE_TIME_IN_REQUEST] == "true"
-
-    resp = await admin_client.get(f"{API}/settings")
-    assert resp.json()["settings"][KEY_IS_USE_TIME_IN_REQUEST] == "true"
-    assert resp.json()["settings"][KEY_IS_USE_END_DATE_IN_REQUEST] == "true"
+async def test_removed_request_flags_rejected(admin_client):
+    """Флаги is_use_* удалены (динамический конструктор) — ключи больше не принимаются."""
+    resp = await admin_client.put(
+        f"{API}/settings",
+        json={
+            "settings": {
+                "requests.is_use_time_in_request": "true",
+                "requests.is_use_end_date_in_request": "true",
+            }
+        },
+    )
+    assert resp.status_code == 400
+    assert "is_use_time_in_request" in resp.json()["detail"]

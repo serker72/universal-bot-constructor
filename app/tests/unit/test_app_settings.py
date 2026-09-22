@@ -5,14 +5,10 @@ import pytest
 from app.services.app_settings import (
     DEFAULT_CANCEL_INTERVAL_HOURS,
     DEFAULT_CONSENT_TEXT,
-    DEFAULT_IS_USE_END_DATE_IN_REQUEST,
-    DEFAULT_IS_USE_TIME_IN_REQUEST,
     DEFAULT_PAGE_SIZE,
     DEFAULT_WELCOME_TEXT,
     KEY_CANCEL_INTERVAL_HOURS,
     KEY_CONSENT_TEXT,
-    KEY_IS_USE_END_DATE_IN_REQUEST,
-    KEY_IS_USE_TIME_IN_REQUEST,
     KEY_PAGE_SIZE,
     KEY_WELCOME_TEXT,
     AppSettingsService,
@@ -98,36 +94,3 @@ async def test_set_delegates_to_repo(service: AppSettingsService, repo):
     await service.set(KEY_WELCOME_TEXT, "Новый текст")
     assert repo.upserted == [(KEY_WELCOME_TEXT, "Новый текст")]
     assert await service.get_welcome_text() == "Новый текст"
-
-
-async def test_flags_default_false(service: AppSettingsService):
-    """Флаги заявки по умолчанию выключены."""
-    assert await service.get_is_use_time_in_request() is DEFAULT_IS_USE_TIME_IN_REQUEST
-    assert (
-        await service.get_is_use_end_date_in_request()
-        is DEFAULT_IS_USE_END_DATE_IN_REQUEST
-    )
-
-
-@pytest.mark.parametrize(
-    "raw",
-    ["true", "True", "TRUE", "1", "yes", "on", "да", "Да", "истина", " true "],
-)
-async def test_flags_true_values(service: AppSettingsService, repo, raw):
-    repo.values = {
-        KEY_IS_USE_TIME_IN_REQUEST: raw,
-        KEY_IS_USE_END_DATE_IN_REQUEST: raw,
-    }
-    assert await service.get_is_use_time_in_request() is True
-    assert await service.get_is_use_end_date_in_request() is True
-
-
-@pytest.mark.parametrize("raw", ["false", "0", "no", "off", "нет", "abc", ""])
-async def test_flags_unrecognized_falls_back(service: AppSettingsService, repo, raw):
-    """Нераспознанное значение → default (False)."""
-    repo.values = {
-        KEY_IS_USE_TIME_IN_REQUEST: raw,
-        KEY_IS_USE_END_DATE_IN_REQUEST: raw,
-    }
-    assert await service.get_is_use_time_in_request() is False
-    assert await service.get_is_use_end_date_in_request() is False

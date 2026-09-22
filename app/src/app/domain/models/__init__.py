@@ -6,6 +6,9 @@ from app.domain.models.device import Device
 from app.domain.models.object import Object
 from app.domain.models.object_manager import ObjectManager
 from app.domain.models.request import Request, RequestStatus
+from app.domain.models.request_category_field import RequestCategoryField
+from app.domain.models.request_field import RequestAvailableField, RequestFieldType
+from app.domain.models.request_field_value import RequestField
 from app.domain.models.session import Session
 from app.domain.models.setting import Setting
 from app.domain.models.user import User, UserRole
@@ -18,6 +21,10 @@ __all__ = [
     "Object",
     "ObjectManager",
     "Request",
+    "RequestCategoryField",
+    "RequestAvailableField",
+    "RequestField",
+    "RequestFieldType",
     "RequestStatus",
     "Session",
     "Setting",

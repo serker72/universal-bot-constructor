@@ -12,7 +12,8 @@ from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from app.api.deps import get_or_404
 from app.api.schemas.common import Page
 from app.api.schemas.request import RequestOut, RequestStatusIn
-from app.domain.models import RequestStatus, User, UserRole
+from app.api.schemas.request_field import RequestFieldValueOut
+from app.domain.models import Request, RequestStatus, User, UserRole
 from app.repository.object import ObjectRepository
 from app.repository.request import RequestRepository
 from app.services.events import (
@@ -21,6 +22,21 @@ from app.services.events import (
 )
 
 router = APIRouter(prefix="/requests", route_class=DishkaRoute, tags=["requests"])
+
+
+def _to_out(req: Request) -> RequestOut:
+    """ORM-объект в схему (динамические поля — из values, selectin-load).."""
+    out = RequestOut.model_validate(req)
+    out.fields = [
+        RequestFieldValueOut(
+            field_id=v.field_id,
+            field_code=v.field.code,
+            field_label=v.field.label,
+            value=v.value_text,
+        )
+        for v in req.values
+    ]
+    return out
 
 
 async def _visible_object_ids(
@@ -56,7 +72,7 @@ async def list_requests(
         offset=offset,
     )
     return Page(
-        items=[RequestOut.model_validate(r) for r in items],
+        items=[_to_out(r) for r in items],
         total=total,
         limit=limit,
         offset=offset,
@@ -71,11 +87,13 @@ async def get_request(
     objects: FromDishka[ObjectRepository],
 ) -> RequestOut:
     """Получить заявку (с проверкой доступа)."""
-    req = get_or_404(await repo.get(request_id), "Request not found")
+    req = get_or_404(
+        await repo.get_with_values(request_id), "Request not found"
+    )
     object_ids = await _visible_object_ids(user, objects)
     if object_ids is not None and req.object_id not in object_ids:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Request not found")
-    return RequestOut.model_validate(req)
+    return _to_out(req)
 
 
 @router.post("/{request_id}/status", response_model=RequestOut)
@@ -91,7 +109,9 @@ async def change_status(
     Допустимые переходы: new → approved | rejected,
     approved → completed (менеджер объекта).
     """
-    req = get_or_404(await repo.get(request_id), "Request not found")
+    req = get_or_404(
+        await repo.get_with_values(request_id), "Request not found"
+    )
 
     # доступ: менеджер, назначенный на объект напрямую или на категорию объекта
     if user.role != UserRole.MANAGER:
@@ -125,4 +145,4 @@ async def change_status(
                 status=req.status.value,
             )
         )
-    return RequestOut.model_validate(req)
+    return _to_out(req)

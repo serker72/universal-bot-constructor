@@ -9,17 +9,19 @@
 
 Особенности:
 - postgres используется напрямую (минуя pgbouncer), см. tests/conftest.py;
-- таблицы тестовой БД очищаются (TRUNCATE) после каждого теста;
+- таблицы тестовой БД очищаются (TRUNCATE) после каждого теста, с
+  lock_timeout/statement_timeout — блокировка даёт ошибку теста, а не зависание;
 - redis DB очищается после каждого теста;
 - rabbitmq не нужен: брокер стартует только в lifespan приложения.
 """
 
-from datetime import date, datetime, time, timezone
+from datetime import datetime, timezone
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from redis.asyncio import Redis
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.config.settings import Settings
@@ -29,6 +31,10 @@ from app.domain.models import (
     Category,
     Object,
     Request,
+    RequestAvailableField,
+    RequestCategoryField,
+    RequestField,
+    RequestFieldType,
     User,
     UserRole,
     Visitor,
@@ -54,15 +60,31 @@ OBJECT_DATA = {
 VISITOR_DATA = {"telegram_id": 100100100, "full_name": "Иванов Иван Иванович"}
 VISITOR_PHONE = "+79991234567"
 REQUEST_PHONE = "+79991234567"
-REQUEST_COMMENT = "Прошу консультацию"
-REQUEST_DATES = {
-    "start_date": date(2026, 10, 1),
-    "start_time": time(14, 30),
-    "end_date": date(2026, 10, 2),
-    "end_time": time(18, 0),
+
+# Справочник полей и значения заявки (динамический конструктор)
+FIELD_TEXT_DATA = {
+    "code": "comment",
+    "type": RequestFieldType.TEXT,
+    "label": "Комментарий",
+    "is_required_default": False,
+    "meta_data": {"max_length": 500},
 }
+FIELD_TIME_DATA = {
+    "code": "delivery_time",
+    "type": RequestFieldType.TIME,
+    "label": "Время доставки",
+    "is_required_default": True,
+    "meta_data": {"minute_step": 15},
+}
+FIELD_VALUE_TEXT = "Прошу консультацию"
+FIELD_VALUE_TIME = "14:30"
+
 PDF_FILENAME = "document.pdf"
 PDF_CONTENT = b"%PDF-1.4 test pdf content"
+
+# Таймауты очистки БД после теста (см. фикстуру _cleanup_db)
+LOCK_TIMEOUT = "5s"
+STATEMENT_TIMEOUT = "30s"
 
 
 @pytest.fixture(scope="session")
@@ -97,13 +119,33 @@ async def db(session_factory) -> AsyncSession:
 
 @pytest.fixture(autouse=True)
 async def _cleanup_db(engine: AsyncEngine):
-    """Очистка всех таблиц тестовой БД после каждого теста."""
+    """Очистка всех таблиц тестовой БД после каждого теста.
+
+    TRUNCATE берёт ACCESS EXCLUSIVE lock. Без таймаутов он ждёт вечно, если
+    мешает незавершённая транзакция (ошибка в тесте после выхода из DI-скоупа)
+    или параллельный прогон pytest на той же БД, — весь прогон «зависает».
+    Таймауты превращают блокировку в понятную ошибку теста.
+    """
     yield
-    async with engine.begin() as conn:
-        for table in reversed(Base.metadata.sorted_tables):
+    try:
+        async with engine.begin() as conn:
+            # SET LOCAL — в пределах этой транзакции очистки
+            await conn.execute(text(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'"))
             await conn.execute(
-                text(f'TRUNCATE TABLE "{table.name}" RESTART IDENTITY CASCADE')
+                text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT}'")
             )
+            for table in reversed(Base.metadata.sorted_tables):
+                await conn.execute(
+                    text(f'TRUNCATE TABLE "{table.name}" RESTART IDENTITY CASCADE')
+                )
+    except DBAPIError as exc:
+        raise RuntimeError(
+            "Очистка тестовой БД не выполнена: TRUNCATE заблокирован "
+            f"(истёк lock_timeout={LOCK_TIMEOUT} / statement_timeout="
+            f"{STATEMENT_TIMEOUT}). Причины: параллельный прогон pytest на той "
+            "же тестовой БД (убедись, что запущен один) или незавершённая "
+            f"транзакция в пуле соединений. Ошибка БД: {exc.orig}"
+        ) from exc
 
 
 @pytest.fixture(autouse=True)
@@ -218,25 +260,85 @@ async def visitor(db: AsyncSession) -> Visitor:
     return v
 
 
+# --- поля заявки (динамический конструктор) ------------------------------------
+
+
 @pytest.fixture
-def request_dates() -> dict:
-    """Даты/время заявки (start/end)."""
-    return dict(REQUEST_DATES)
+async def field_text(db: AsyncSession) -> RequestAvailableField:
+    """TEXT-поле справочника (комментарий)."""
+    f = RequestAvailableField(**FIELD_TEXT_DATA)
+    db.add(f)
+    await db.commit()
+    return f
+
+
+@pytest.fixture
+async def field_time(db: AsyncSession) -> RequestAvailableField:
+    """TIME-поле справочника (время доставки, шаг минут 15)."""
+    f = RequestAvailableField(**FIELD_TIME_DATA)
+    db.add(f)
+    await db.commit()
+    return f
+
+
+@pytest.fixture
+async def category_with_fields(
+    db: AsyncSession,
+    category: Category,
+    field_text: RequestAvailableField,
+    field_time: RequestAvailableField,
+) -> Category:
+    """Категория с привязанными полями (comment → delivery_time)."""
+    db.add(
+        RequestCategoryField(
+            category_id=category.id,
+            field_id=field_text.id,
+            sort_order=1,
+            is_required=False,
+        )
+    )
+    db.add(
+        RequestCategoryField(
+            category_id=category.id,
+            field_id=field_time.id,
+            sort_order=2,
+            is_required=True,
+        )
+    )
+    await db.commit()
+    return category
 
 
 @pytest.fixture
 async def request_obj(
-    db: AsyncSession, visitor: Visitor, obj: Object, request_dates: dict
+    db: AsyncSession,
+    visitor: Visitor,
+    obj: Object,
+    field_text: RequestAvailableField,
+    field_time: RequestAvailableField,
 ) -> Request:
-    """Новая заявка посетителя на объект (с датами/временем)."""
+    """Новая заявка посетителя на объект со значениями полей."""
     r = Request(
         visitor_id=visitor.id,
         object_id=obj.id,
         phone=REQUEST_PHONE,
-        comment=REQUEST_COMMENT,
-        **request_dates,
     )
     db.add(r)
+    await db.flush()
+    db.add_all(
+        [
+            RequestField(
+                request_id=r.id,
+                field_id=field_text.id,
+                value_text=FIELD_VALUE_TEXT,
+            ),
+            RequestField(
+                request_id=r.id,
+                field_id=field_time.id,
+                value_text=FIELD_VALUE_TIME,
+            ),
+        ]
+    )
     await db.commit()
     return r
 

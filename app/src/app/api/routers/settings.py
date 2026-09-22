@@ -8,8 +8,6 @@ from app.api.schemas.setting import SettingsIn, SettingsOut
 from app.services.app_settings import (
     KEY_CANCEL_INTERVAL_HOURS,
     KEY_CONSENT_TEXT,
-    KEY_IS_USE_END_DATE_IN_REQUEST,
-    KEY_IS_USE_TIME_IN_REQUEST,
     KEY_PAGE_SIZE,
     KEY_WELCOME_TEXT,
     AppSettingsService,
@@ -20,8 +18,6 @@ ALLOWED_KEYS = {
     KEY_CANCEL_INTERVAL_HOURS,
     KEY_CONSENT_TEXT,
     KEY_WELCOME_TEXT,
-    KEY_IS_USE_TIME_IN_REQUEST,
-    KEY_IS_USE_END_DATE_IN_REQUEST,
 }
 
 router = APIRouter(prefix="/settings", route_class=DishkaRoute, tags=["settings"])

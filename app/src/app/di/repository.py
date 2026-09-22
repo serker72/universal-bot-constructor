@@ -7,6 +7,7 @@ from app.repository.category import CategoryRepository
 from app.repository.device import DeviceRepository
 from app.repository.object import ObjectRepository
 from app.repository.request import RequestRepository
+from app.repository.request_field import RequestFieldRepository
 from app.repository.session import SessionRepository
 from app.repository.setting import SettingRepository
 from app.repository.user import UserRepository
@@ -35,6 +36,12 @@ class RepositoryProvider(Provider):
     @provide(scope=Scope.REQUEST)
     def provide_request_repo(self, session: AsyncSession) -> RequestRepository:
         return RequestRepository(session)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_request_field_repo(
+        self, session: AsyncSession
+    ) -> RequestFieldRepository:
+        return RequestFieldRepository(session)
 
     @provide(scope=Scope.REQUEST)
     def provide_device_repo(self, session: AsyncSession) -> DeviceRepository:

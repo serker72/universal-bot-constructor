@@ -18,7 +18,7 @@ from aiogram_dialog import setup_dialogs
 from dishka.integrations.aiogram import setup_dishka
 from faststream.rabbit import RabbitBroker
 
-from app.bot.dialogs.request_dialog import dialog as request_dialog
+from app.bot.dialogs.dynamic_request_dialog import dialog as request_dialog
 from app.bot.handlers import menu, registration, requests
 from app.bot.notifications import register_notification_consumers
 from app.config.settings import Settings

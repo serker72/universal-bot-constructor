@@ -1,6 +1,6 @@
 """Сервис бота: регистрация посетителей, меню, заявки, отмена."""
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,6 +8,7 @@ from app.domain.models import Category, Object, Request, RequestStatus, Visitor
 from app.repository.category import CategoryRepository
 from app.repository.object import ObjectRepository
 from app.repository.request import RequestRepository
+from app.repository.request_field import RequestFieldRepository
 from app.repository.visitor import VisitorRepository
 from app.services.app_settings import AppSettingsService
 from app.services.events import EventPublisher, RequestCancelledEvent, RequestCreatedEvent, VisitorRegisteredEvent
@@ -27,6 +28,7 @@ class BotService:
         categories: CategoryRepository,
         objects: ObjectRepository,
         requests: RequestRepository,
+        request_fields: RequestFieldRepository,
         app_settings: AppSettingsService,
         publisher: EventPublisher,
     ) -> None:
@@ -35,6 +37,7 @@ class BotService:
         self.categories = categories
         self.objects = objects
         self.requests = requests
+        self.request_fields = request_fields
         self.app_settings = app_settings
         self.publisher = publisher
 
@@ -124,19 +127,45 @@ class BotService:
 
     # -- заявки -------------------------------------------------------------
 
+    async def get_category_schema(self, object_id: int) -> list[dict]:
+        """Схема полей заявки для категории объекта (для динамического диалога).
+
+        Возвращает список dict: id, code, type, label, is_required, meta_data
+        в порядке sort_order. Пустой список — категория без полей.
+        """
+        obj = await self.get_object(object_id)
+        if obj is None:
+            raise BotServiceError("Объект не найден")
+        rows = await self.request_fields.list_category_fields(obj.category_id)
+        return [
+            {
+                "id": f.id,
+                "code": f.code,
+                "type": f.type.value,
+                "label": f.label,
+                "is_required": link.is_required,
+                "meta_data": f.meta_data or {},
+            }
+            for link, f in rows
+        ]
+
+    async def get_request_values(self, request_id: int) -> list[tuple[str, str | None]]:
+        """Значения полей заявки (label, value) — для карточки «Мои заявки»."""
+        rows = await self.request_fields.list_values(request_id)
+        return [(f.label, v.value_text) for v, f in rows]
+
     async def create_request(
         self,
         visitor: Visitor,
         object_id: int,
         phone: str,
-        comment: str | None,
-        *,
-        start_date: date | None = None,
-        start_time: time | None = None,
-        end_date: date | None = None,
-        end_time: time | None = None,
+        values: dict[int, str | None],
     ) -> Request:
-        """Создать заявку (статус «новая») и уведомить менеджеров объекта."""
+        """Создать заявку (статус «новая») с динамическими полями
+        и уведомить менеджеров объекта.
+
+        values — {field_id: value_text} по схеме полей категории объекта.
+        """
         obj = await self.get_object(object_id)
         if obj is None:
             raise BotServiceError("Объект не найден")
@@ -144,14 +173,12 @@ class BotService:
             visitor_id=visitor.id,
             object_id=object_id,
             phone=phone,
-            comment=comment,
-            start_date=start_date,
-            start_time=start_time,
-            end_date=end_date,
-            end_time=end_time,
             status=RequestStatus.NEW,
         )
         await self.requests.add(req)
+        # динамические поля заявки (одна транзакция с заявкой)
+        if values:
+            await self.request_fields.add_values(req.id, values)
         # менеджеры объекта напрямую + менеджеры категории объекта
         manager_ids = await self.objects.list_access_manager_ids(object_id)
         await self.publisher.publish_request_created(

@@ -11,21 +11,25 @@ class RegistrationStates(StatesGroup):
     consent = State()
 
 
-class RequestStates(StatesGroup):
-    """Создание заявки (диалог aiogram-dialog).
+class DynamicRequestSG(StatesGroup):
+    """Создание заявки (динамический конструктор, aiogram-dialog).
 
-    Порядок прохождения зависит от флагов настроек
-    is_use_time_in_request / is_use_end_date_in_request:
-    телефон → начальная дата → (время начала) → (дата окончания)
-    → (время окончания) → комментарий.
+    Состояния — по ТИПУ поля, а не по полю (aiogram-dialog требует
+    статического набора состояний). Порядок прохождения задаётся
+    массивом schema в start_data + current_step в dialog_data:
+    телефон → поля схемы (text/number/date/time_hour+time_minute/
+    select) → summary.
+
+    TIME-поле занимает два окна: input_time_hour → input_time_minute
+    (без сдвига current_step между ними).
     """
 
     input_phone = State()
-    start_date = State()
-    start_hour = State()
-    start_min = State()
-    end_date = State()
-    end_hour = State()
-    end_min = State()
-    input_comment = State()
+    input_text = State()
+    input_number = State()
+    input_date = State()
+    input_time_hour = State()
+    input_time_minute = State()
+    input_select = State()
+    summary = State()
 

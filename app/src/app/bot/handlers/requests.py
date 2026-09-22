@@ -1,11 +1,10 @@
-"""Хендлеры заявок: создание (диалог), мои заявки, отмена."""
+"""Хендлеры заявок: создание (динамический диалог), мои заявки, отмена."""
 
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 from aiogram_dialog import DialogManager, StartMode
 from dishka.integrations.aiogram import FromDishka
 
-from app.bot.dialogs.request_dialog import FLAG_USE_END_DATE, FLAG_USE_TIME
 from app.bot.keyboards import (
     CreateRequestCB,
     RequestCB,
@@ -14,14 +13,14 @@ from app.bot.keyboards import (
     request_details_keyboard,
 )
 from app.bot.services import BotService, BotServiceError
-from app.bot.states import RequestStates
+from app.bot.states import DynamicRequestSG
 from app.bot.statuses import STATUS_TEXT
 from app.bot.handlers.menu import ensure_visitor
 
 router = Router(name="requests")
 
 
-# -- создание заявки (диалог aiogram-dialog) ---------------------------------
+# -- создание заявки (динамический конструктор, aiogram-dialog) ---------------
 
 
 @router.callback_query(CreateRequestCB.filter())
@@ -31,21 +30,25 @@ async def start_request(
     dialog_manager: DialogManager,
     bot_service: FromDishka[BotService],
 ) -> None:
-    """Кнопка «Создать заявку»: запуск диалога с флагами из настроек."""
+    """Кнопка «Создать заявку»: запуск диалога по схеме полей категории."""
     if not await ensure_visitor(callback, bot_service):
         return
-    use_time = await bot_service.app_settings.get_is_use_time_in_request()
-    use_end_date = await bot_service.app_settings.get_is_use_end_date_in_request()
+    # схема полей заявки для категории объекта (сортировка из БД)
+    try:
+        schema = await bot_service.get_category_schema(callback_data.object_id)
+    except BotServiceError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
     # RESET_STACK: закрыть возможный незавершённый диалог (состояние
     # хранится в Redis и переживает рестарты), иначе он останется в стеке
     # и отрисуется после done() нового диалога.
     await dialog_manager.start(
-        RequestStates.input_phone,
+        DynamicRequestSG.input_phone,
         mode=StartMode.RESET_STACK,
         data={
             "object_id": callback_data.object_id,
-            FLAG_USE_TIME: use_time,
-            FLAG_USE_END_DATE: use_end_date,
+            "schema": schema,
+            "answers": {},
         },
     )
 
@@ -111,7 +114,7 @@ async def show_request_details(
     callback_data: RequestCB,
     bot_service: FromDishka[BotService],
 ) -> None:
-    """Карточка заявки: статус, телефон, комментарий, кнопка отмены."""
+    """Карточка заявки: статус, телефон, значения полей, кнопка отмены."""
     if not await ensure_visitor(callback, bot_service):
         return
     visitor = await bot_service.get_visitor(callback.from_user.id)
@@ -125,18 +128,9 @@ async def show_request_details(
         f"Статус: {STATUS_TEXT.get(status, status)}\n"
         f"Телефон: {req.phone}"
     )
-    if req.start_date:
-        start = req.start_date.strftime("%d.%m.%Y")
-        if req.start_time:
-            start += f" {req.start_time.strftime('%H:%M')}"
-        text += f"\nНачало: {start}"
-    if req.end_date:
-        end = req.end_date.strftime("%d.%m.%Y")
-        if req.end_time:
-            end += f" {req.end_time.strftime('%H:%M')}"
-        text += f"\nОкончание: {end}"
-    if req.comment:
-        text += f"\nКомментарий: {req.comment}"
+    # значения динамических полей заявки (label: value)
+    for label, value in await bot_service.get_request_values(req.id):
+        text += f"\n{label}: {value if value else '—'}"
     can_cancel = await bot_service.can_cancel(req)
     await callback.message.edit_text(  # type: ignore[union-attr]
         text, reply_markup=request_details_keyboard(req.id, can_cancel)

@@ -10,6 +10,7 @@ from app.config.settings import Settings
 from app.repository.category import CategoryRepository
 from app.repository.object import ObjectRepository
 from app.repository.request import RequestRepository
+from app.repository.request_field import RequestFieldRepository
 from app.repository.visitor import VisitorRepository
 from app.services.app_settings import AppSettingsService
 from app.services.events import EventPublisher
@@ -35,6 +36,7 @@ class BotProvider(Provider):
         categories: CategoryRepository,
         objects: ObjectRepository,
         requests: RequestRepository,
+        request_fields: RequestFieldRepository,
         app_settings: AppSettingsService,
         publisher: EventPublisher,
     ) -> BotService:
@@ -44,6 +46,7 @@ class BotProvider(Provider):
             categories=categories,
             objects=objects,
             requests=requests,
+            request_fields=request_fields,
             app_settings=app_settings,
             publisher=publisher,
         )

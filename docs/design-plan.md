@@ -135,11 +135,10 @@ Compose-файлы разделены по назначению:
 
 - **/login** — вход
 - **/dashboard** — дашборд
-- **/categories** — категории (CRUD, сортировка, активность, назначение менеджеров)
+- **/categories** — категории (CRUD, сортировка, активность, назначение менеджеров, «Поля заявки»)
 - **/objects** — объекты (CRUD, сортировка, активность, назначение менеджеров, загрузка PDF)
-- **/requests** — заявки (фильтры по статусу/дате/объекту; менеджер — свои, админ — все; подтверждение/отклонение менеджером)
-- **/requests** — заявки (фильтры по статусу/дате/объекту; менеджер — свои, админ — все; подтверждение/отклонение менеджером)
-- **/users** — пользователи (только admin)
+- **/fields** — справочник полей заявки (CRUD: код, тип, подпись, обязательность, meta_data)
+- **/requests** — заявки (фильтры по статусу/объекту/дате; менеджер — свои, админ — все; подтверждение/отклонение менеджером; значения динамических полей)
 - **/users** — пользователи (только admin)
 - **/visitors** — посетители (бан/разбан, поиск/фильтр; только admin)
 - **/devices** — устройства (фильтр по пользователю)
@@ -403,6 +402,298 @@ Unit-тесты (`app/tests/unit/`):
 
 ---
 
+## Динамический конструктор заявок (настраиваемые поля)
+
+> Расширение сценария заявок: админ настраивает для каждой категории набор
+> полей заявки (тип, подпись, обязательность, порядок), бот строит диалог
+> динамически по схеме из БД. Заменяет текущий фиксированный диалог
+> (телефон → даты → комментарий) и глобальные флаги `is_use_*`.
+
+### Анализ предложения (адаптация к текущей архитектуре)
+
+Предложенный план принят за основу с исправлениями:
+
+1. **Терминология**: проект использует `Request`/`requests` (не `order`) —
+   таблицы называются `request_available_fields`, `request_category_fields`,
+   `request_fields`; состояния — `DynamicRequestSG`.
+2. **Телефон остаётся фиксированным**: `requests.phone` нужен менеджеру для
+   связи, хранится в профиле посетителя (`visitors.phone`), отображается в
+   «Моих заявках» и уведомлениях. Телефон собирается как сейчас (окно
+   «номер из профиля»), динамические поля — дополнительные.
+3. **Состояния по типу поля, а не по полю** — корректно: aiogram-dialog
+   требует статического набора состояний; динамичность обеспечивается
+   роутингом по `current_step` в массиве `schema`. Принято без изменений.
+4. **Глобальные флаги `is_use_time_in_request` / `is_use_end_date_in_request`**
+   устаревают: конфигурация дат/времени переходит в поля категории. Флаги
+   удаляются из `ALLOWED_KEYS` API и чекбоксов `/settings` после перехода.
+5. **Переиспользование**: `RuCalendar`, `generate_hours`/`generate_minutes`
+   (шаг минут из `meta_data` вместо константы 5), паттерн
+   `get_or_404`/`sync_managers` для API, `ensure_visitor` для бота.
+6. **Добавлено к предложению** (в исходном плане отсутствует):
+   - API управления полями (CRUD справочника + привязка к категории);
+   - frontend: страница `/fields`, модалка настройки полей категории;
+   - отображение значений полей: менеджерам в `/requests` (frontend) и
+     посетителю в карточке «Мои заявки» (бот);
+   - кнопки «Назад» между динамическими шагами (back-роутинг по
+     `current_step - 1`, как в текущем диалоге);
+   - валидация по типам: TEXT — длина из `meta_data`, NUMBER — min/max,
+     SELECT — значение из списка опций; DATE/TIME проверяются виджетами.
+
+### Принятые решения
+
+- **A. Судьба старых колонок `requests.start_date/start_time/end_date/end_time`**
+  и `requests.comment` — **Вариант 2 (решено)**: удалить колонки сразу в
+  миграции конструктора; значения старых заявок по этим полям теряются
+  (данные не переносятся в `request_fields`). `requests.phone` остаётся.
+- **B. Хранение значений**: принято из предложения — универсальное
+  `value_text` (String). Альтернатива (отдельные колонки
+  text/number/date/time) — строже по типам, но сложнее в запросах;
+  для текущих объёмов не требуется.
+- **C. Миграция старых заявок**: значения старых колонок **не** переносятся
+  в `request_fields` (следует из A — колонки удаляются сразу).
+
+### Схема БД (миграция alembic)
+
+1. **`request_available_fields`** — справочник полей:
+   - `id` Integer PK;
+   - `code` String(64) unique — тех. код (`delivery_time`);
+   - `type` Enum(`tp_request_field_type`: text, number, date, time, select);
+   - `label` String(255) — подпись для пользователя;
+   - `is_required_default` Boolean;
+   - `meta_data` JSONB nullable — опции SELECT (`{"options": ["Вариант 1", ...]}`),
+     шаг минут TIME (`{"minute_step": 15}`), min/max NUMBER, max_length TEXT.
+2. **`request_category_fields`** — привязка к категории:
+   - `id` Integer PK;
+   - `category_id` FK → categories (CASCADE);
+   - `field_id` FK → request_available_fields (CASCADE);
+   - `sort_order` Integer; `is_required` Boolean;
+   - уникальный индекс `(category_id, field_id)`.
+3. **`request_fields`** — значения полей заявки:
+   - `id` Integer PK;
+   - `request_id` FK → requests (CASCADE);
+   - `field_id` FK → request_available_fields (RESTRICT — история заявок);
+   - `value_text` String(1024) nullable (пропущенное обязательное — ошибка
+     на этапе валидации диалога, в БД NULL не попадает);
+   - уникальный индекс `(request_id, field_id)`, индекс по `request_id`.
+
+Домен: `RequestFieldType` (enum), `RequestAvailableField`,
+`RequestCategoryField`, `RequestField` (`app/src/app/domain/models/`),
+связь `Request.values → request_fields`.
+
+### FSM (бот)
+
+Класс `DynamicRequestSG` (StatesGroup) — состояния по типу поля:
+
+- `input_phone` (фиксированный первый шаг, как сейчас);
+- `input_text`, `input_number`, `input_date`,
+  `input_time_hour`, `input_time_minute`, `input_select`;
+- `summary` — предпросмотр всех ответов + кнопка «Отправить».
+
+Контекст диалога:
+
+- `start_data["schema"]` — отсортированный список полей категории
+  (dict: id, code, type, label, is_required, meta_data);
+- `start_data["answers"]` — `{field_id: value_str}`;
+- `dialog_data["current_step"]` — индекс текущего поля в schema;
+- `dialog_data["temp_hour"]` — выбранный час между окнами TIME.
+
+### Routing Engine (`bot/dialogs/dynamic_request_dialog.py`)
+
+- `start_dynamic_order(manager)`: получить schema полей категории объекта
+  (кэш в `start_data`), `current_step = 0`, `switch_to` по типу первого
+  поля (пустая schema → сразу `summary`);
+- `process_and_go_next(value)`: записать ответ, `current_step += 1`;
+  конец схемы → `summary`; иначе `switch_to` по типу следующего поля
+  (TIME — всегда на `input_time_hour`);
+- `on_hour_selected`: `temp_hour = hour` → `input_time_minute`
+  (без сдвига `current_step`);
+- `on_minute_selected`: `f"{temp_hour}:{minute:02d}"` →
+  `process_and_go_next(value)`;
+- **Назад**: `Button` с `switch_to` по предыдущему полю
+  (`current_step - 1`, TIME → `input_time_hour`); из телефона — выход
+  (`manager.done()`).
+
+### UI-слой (окна и геттеры)
+
+Геттеры:
+
+- `get_current_field_data` — label, is_required, meta_data поля по
+  `current_step` (текст окна: подпись + пометка «обязательно»);
+- `get_hours` / `get_minutes` — существующие генераторы, шаг минут из
+  `meta_data["minute_step"]` (default 5);
+- `get_select_options` — опции SELECT из `meta_data["options"]`;
+- `get_summary` — список «label: value» по schema + answers.
+
+Окна:
+
+- `input_phone` — как сейчас (профиль + MessageInput);
+- `input_text` / `input_number` — `MessageInput` + «Пропустить»
+  (`when=not is_required`); NUMBER — валидация int + диапазон;
+- `input_date` — `RuCalendar` (min_date=сегодня) + «Пропустить»;
+- `input_time_hour` / `input_time_minute` — `Select` в `ScrollingGroup`,
+  «Назад к часам» в окне минут;
+- `input_select` — `Select` по опциям из `meta_data`;
+- `summary` — `Format` сводки + «✅ Отправить» + «◀️ Назад»
+  (к последнему полю схемы).
+
+### Финализация
+
+- `BotService.create_request(visitor, object_id, phone, values)`:
+  создать `Request` (phone, object_id, status=new) + bulk-вставка
+  `RequestField` по answers (одной транзакцией, как сейчас — сессия
+  REQUEST-scope коммитится в DI), публикация `RequestCreatedEvent`;
+- валидация обязательных полей до отправки (все answered или
+  `is_required=False`), иначе возврат на первый пропущенный шаг.
+
+### API
+
+- `GET/POST /request-fields`, `PATCH/DELETE /request-fields/{id}` (admin) —
+  CRUD справочника (`code`, `type`, `label`, `is_required_default`,
+  `meta_data`);
+- `GET/PUT /categories/{id}/fields` (admin) — привязка полей категории
+  с `sort_order`/`is_required` (паттерн `sync_managers`: diff списков);
+- `RequestOut` + `fields: list[RequestFieldValueOut]`
+  (`{field_code, field_label, value}`) — значения полей в списке/карточке
+  заявок (join по `request_fields`, eager-load чтобы избежать N+1);
+- `RequestOut` больше **не** содержит `start_date/start_time/end_date/
+  end_time/comment` (колонки удалены — решение A, вариант 2);
+- frontend `/requests`: фильтры по датам (`date_from`/`date_to` →
+  `requests.created_at` вместо удалённого `start_date`).
+
+### Frontend
+
+- Страница `/fields` (admin): CRUD справочника полей (код, тип, подпись,
+  обязательность по умолчанию, meta_data — JSON-редактор/поля по типу);
+- `/categories`: кнопка «Поля заявки» — модалка привязки полей к категории
+  (чекбоксы + sort_order + is_required, PUT полного списка);
+- `/requests`: отображение значений полей (карточка/расширяющаяся строка).
+
+### Бот (отображение)
+
+- Карточка заявки («Мои заявки»): строки значений полей
+  (`label: value`) после телефона/статуса;
+- Уведомления менеджерам — без изменений (событие уже содержит id заявки).
+
+### Миграция настроек
+
+- Из `ALLOWED_KEYS` API и `/settings` удалить
+  `requests.is_use_time_in_request`, `requests.is_use_end_date_in_request`;
+- из `AppSettingsService` удалить соответствующие геттеры;
+- старый диалог `request_dialog.py` и `RequestStates` удалить.
+
+### Тесты
+
+Unit:
+
+- схема полей: валидация meta_data по типам (SELECT без options → ошибка,
+  TIME без minute_step → default 5);
+- роутинг: `process_and_go_next` (конец схемы → summary, TIME →
+  input_time_hour), назад по current_step;
+- финализация: обязательные поля не отвечены → ошибка; ответы →
+  values корректно агрегированы.
+
+Интеграционные:
+
+- API: CRUD полей, PUT полей категории (diff, unknown field 400),
+  `RequestOut.fields` содержит значения; `RequestOut` не содержит
+  `start_date/...`/`comment` (после миграции);
+- БД: каскады (удаление категории → привязки; удаление заявки → значения;
+  удаление поля с существующими значениями — RESTRICT);
+- фикстуры: `request_with_fields` (заявка со значениями полей);
+- обновить фикстуры `request_dates`/`request_obj` (данные заявок —
+  через поля, а не колонки) и тесты `test_api_requests.py`.
+
+### Порядок реализации (подзадачи)
+
+1. Миграция alembic: 3 новые таблицы + удаление колонок
+   `requests.start_date/start_time/end_date/end_time/comment` (решение A);
+2. Домен: `RequestFieldType`, `RequestAvailableField`, `RequestCategoryField`,
+   `RequestField`; правка модели `Request` (убрать колонки, связь values);
+3. Репозитории: `RequestFieldRepository` (справочник + привязки + значения),
+   обновить `RequestRepository` (фильтры дат → created_at);
+4. API: роутер `request_fields` (+ привязки категорий), схемы, `RequestOut.fields`;
+5. Бот: `DynamicRequestSG`, `dynamic_request_dialog.py` (routing engine,
+   окна по типам), интеграция в `handlers/requests.py`; удаление старого
+   диалога и `RequestStates`;
+6. Настройки: удалить флаги `is_use_*` (ALLOWED_KEYS, AppSettingsService,
+   frontend /settings);
+7. Frontend: страница `/fields`, модалка полей категории, `/requests` —
+   значения полей;
+8. Тесты: unit + интеграционные (по списку выше), прогон в `ubc-test-runner`.
+
+---
+
+## Зависание полного прогона pytest с coverage
+
+**Статус: не решено, отложено (22.09.2026).**
+
+### Симптом
+
+- Пофайловые прогоны проходят полностью: unit — 89 passed, интеграционные
+  батчами — 34 + 27 + 43 + 86 passed (итого 279 тестов);
+- полный прогон `pytest --cov=src` в одной сессии зависает на ~33%
+  (начало интеграционных тестов) — >9 мин без прогресса;
+- без `--cov` те же файлы в тех же батчах проходят;
+- ранее такое зависание уже наблюдалось и было объяснено (см. раздел
+  «Динамический конструктор заявок — реализация», исправления 20.09.2026):
+  фикстура `_cleanup_db` делает `TRUNCATE ... RESTART IDENTITY CASCADE`
+  (ACCESS EXCLUSIVE, без `lock_timeout`) и вечно ждёт, если в тестовой БД
+  есть незавершённая транзакция или параллельный прогон.
+
+### Особенности текущего случая
+
+- параллельных прогонов не было (проверено `pg_stat_activity` — висящих
+  TRUNCATE не зафиксировано в момент зависания);
+- зависание воспроизводится именно при полном прогоне ВСЕХ интеграционных
+  тестов в одной сессии; те же файлы по отдельности/батчами < 2 мин не виснут;
+- `pytest-timeout` (`timeout = 120`) в `app/pyproject.toml` не срабатывает:
+  метод `signal` не прерывает блокировку внутри `TRUNCATE` в фикстуре,
+  если сигнал доставлен в момент ожидания блокировки БД (ждёт libpq-сокет,
+  Python-код не выполняется).
+
+### Гипотезы
+
+1. Соединение с незакрытой транзакцией из раннего интеграционного теста
+   (ошибка сериализации/ DI-скоупа после формирования ответа) — TRUNCATE
+   следующего теста ждёт его вечно; при батчах «виновник» просто не попадает
+   в тот же прогон.
+2. Взаимодействие coverage-трассировки с таймингами (замедление) — маскирует
+   или провоцирует гонку в фикстурах.
+3. Исчерпание пула соединений test-движка при полном прогоне (second pool +
+   DI-сессии) — взаимоблокировка на уровне пула, а не БД.
+
+### План диагностики
+
+1. `docker compose -f docker-compose.test.yml up test-runner` (или штатный
+   способ запуска тестов) — полный прогон с `--cov` и параллельно
+   `SELECT pid, state, wait_event_type, wait_event, xact_start, left(query,80)
+   FROM pg_stat_activity WHERE datname = '<test_db>'` — зафиксировать, кто
+   кого блокирует в момент зависания;
+2. прогон с `-v` (по одному имени теста в логе) — определить ТОЧНУЮ позицию
+   зависания (пока известно только ~33%);
+3. бисекция: добавить половину интеграционных файлов к unit — сузить
+   «виновника»;
+4. проверить `tests/integration/conftest.py`: порядок фикстур
+   (`_cleanup_db` относительно client/engine), явный `engine.dispose()` /
+   `commit/rollback` в финализаторах.
+
+### Варианты исправления (по итогам диагностики)
+
+- `SET lock_timeout` (например 10 с) перед TRUNCATE в `_cleanup_db` —
+  зависание превратится в явную ошибку с трассировкой;
+- гарантированное завершение транзакций DI-сессий в фикстуре клиента
+  (shutdown hook вместо DI ExitError);
+- отдельная тестовая БД на батч (если причина — перекрёстное влияние);
+- `pytest-timeout` с методом `thread` вместо `signal`.
+
+### Временное решение (принято)
+
+- тесты гонять батчами (проходят);
+- coverage замерять только по unit-тестам:
+  `pytest tests/unit --cov=src --cov-report=term-missing`.
+
+---
+
 ## Как использовать этот файл в новой сессии
 
 1. Откройте новый диалог.
@@ -521,10 +812,13 @@ Unit-тесты (`app/tests/unit/`):
     (`CONSUMER_QUEUE_*` / `CONSUMER_ROUTING_*`), добавлено событие
     `bot.notify.request.status` (смена статуса заявки → посетителю);
     брокер стартует ПОСЛЕ регистрации подписчиков (faststream 0.7).
-- **Шаг 7** — актуализирован частично: unit + интеграционные тесты существуют
-  и прогоняются в docker (`ubc-test-runner`, 211 passed); тесты диалога
-  заявки (флаги, генераторы времени, RuCalendar, валидация/агрегация)
-  добавлены в рамках доработки «Диалог создания заявки».
+- **Шаг 7** — выполнен: unit + интеграционные тесты прогоняются в docker
+  (`ubc-test-runner`): 89 unit + 129 integration = **218 passed** (полный прогон
+  `pytest` без `-x`, ~3 мин). Покрыты: валидаторы, сервисы (токены, PDF, пароли,
+  настройки), схемы, генераторы времени, `RuCalendar`, роутинг динамического
+  диалога заявки, репозитории и весь REST API (auth, categories, objects, pdf,
+  users, visitors, requests, request-fields, sessions, devices, settings).
+  Защита от зависания прогона — `pytest-timeout` (`timeout = 120`).
 - **Шаг 8** — выполнен: итоговый документ проектирования `docs/architecture.md`
   (архитектура и компоненты, ER-модель, API-контракты, схема callback'ов и
   уведомлений бота, потоки данных, запуск и эксплуатация, известные
@@ -581,3 +875,76 @@ Unit-тесты (`app/tests/unit/`):
   - frontend: `/categories` — кнопка «Менеджеры» + модалка назначения;
   - тесты: 103 unit + 116 integration passed (прогон в `ubc-test-runner`,
     миграция тестовой БД через `db-update-test`).
+- **Code review (безопасность/дублирование/эффективность)** — выполнен:
+  38 пунктов исправлены (fail-fast JWT, scram-sha-256, атомарный rate-limit,
+  ManagerLinkMixin, get_or_404, PATCH-семантика и др.) — отчёт и статусы:
+  `docs/code-review-report.md`; тесты: 107 unit + 116 integration passed.
+- **Динамический конструктор заявок (настраиваемые поля)** — план в разделе
+  «Динамический конструктор заявок» выше. Решения приняты: A — вариант 2
+  (старые колонки `start_date/start_time/end_date/end_time/comment` удаляются
+  сразу, значения старых заявок теряются); B — хранение `value_text`;
+  C — значения старых заявок не переносятся.
+- **Динамический конструктор заявок — реализация (19–20.09.2026)** — выполнено:
+  - миграции `6ff1993df41c` (request_available_fields), `ddc4dbf735eb`
+    (request_category_fields), `b17f420b729b` (request_fields),
+    `8f72ad889d7c` (удаление старых колонок requests) — применены к основной
+    и тестовой БД (head = `8f72ad889d7c`);
+  - правило: в миграциях `sa.Enum` только с классом модели — в `6ff1993df41c`
+    исправлено на `sa.Enum(RequestFieldType, name="tp_request_field_type",
+    values_callable=...)`, откат до `c37575650d4b` и повторный upgrade
+    выполнены (обе БД); метки в БД: text/number/date/time/select;
+  - модель `meta_data` приведена к `JSONB` (расхождение model/DB устранено,
+    `alembic check` расхождений типов не показывает);
+  - домен: `RequestFieldType`, `RequestAvailableField`, `RequestCategoryField`,
+    `RequestField`; у `Request` удалены `comment/start_date/start_time/
+    end_date/end_time`, добавлена связь `values` (`lazy="selectin"`);
+  - репозитории: `RequestFieldRepository` (справочник, привязки категорий,
+    значения заявок, `count_request_values`), `RequestRepository.get_with_values`
+    и `list_page` — eager-load значений вместе со справочником поля;
+  - API: `/request-fields` (CRUD, валидация `meta_data` по типу),
+    `GET/PUT /request-fields/categories/{id}/fields` (diff-замена состава),
+    `RequestOut.fields`; `DELETE /request-fields/{id}` — 400 при наличии
+    значений заявок (FK RESTRICT);
+  - бот: `DynamicRequestSG` + `bot/dialogs/dynamic_request_dialog.py`
+    (routing engine, окна по типам полей, summary, финализация через
+    `BotService.create_request(values=...)`); карточка «Мои заявки» показывает
+    значения полей; старый `request_dialog.py`, `RequestStates` и флаги
+    `is_use_*` удалены (`ALLOWED_KEYS`, `AppSettingsService`, `/settings`);
+  - frontend: страница `/fields` (CRUD справочника), `/categories` — модалка
+    «Поля заявки», `/requests` — значения полей и фильтр по `created_at`;
+  - **исправления 20.09.2026 (найденные при прогоне тестов)**:
+    - `MissingGreenlet` в 7 тестах `test_api_requests.py`: `RequestOut.fields`
+      строится из `value.field.code/label`, а `RequestField.field` грузился
+      лениво вне async-контекста. Добавлены
+      `RequestRepository.get_with_values()` и
+      `selectinload(Request.values).selectinload(RequestField.field)` в
+      `list_page`; роутер заявок читает заявки только через `get_with_values`;
+    - `DELETE /request-fields/{id}`: `session.delete()` не выполняет flush,
+      IntegrityError (FK RESTRICT) всплывал на `commit` в `di/db.py` уже после
+      формирования ответа (dishka ExitError вместо 400). Добавлены
+      предварительная проверка `count_request_values()` и `flush()` внутри
+      try/except → корректный 400;
+    - **зависание полного прогона pytest** (>15 мин) не воспроизводится после
+      исправления падений: `pytest` целиком — 218 passed за ~3 мин.
+      Механизм блокировки: фикстура `_cleanup_db` выполняет
+      `TRUNCATE ... RESTART IDENTITY CASCADE` (ACCESS EXCLUSIVE lock, `lock_timeout`
+      не задан → ждёт вечно). Блокирует либо соединение с незавершённой
+      транзакцией (ошибка после выхода из DI-скоупа — при сериализации ответа,
+      сессия не коммитится/не закрывается), либо **параллельный прогон pytest** в
+      той же тестовой БД (проверено: два одновременных прогона дают
+      `2 failed, 211 passed, 5 errors` и активные `TRUNCATE` в
+      `pg_stat_activity`). Правила прогона: один прогон одновременно; после
+      обрыва `docker exec` проверять `docker top ubc-test-runner` и убивать
+       оставшийся pytest; при подозрении на блокировку смотреть
+       `pg_stat_activity` (`state`, `wait_event`, `xact_age`);
+     - подключен `pytest-timeout`: dev-зависимость + `timeout = 120`
+       (`app/pyproject.toml`, метод signal) — висящий тест прерывается вместо
+       бесконечного ожидания (проверено: тест со `sleep(60)` при `--timeout=3`
+       завершён за 3 с); образ `ubc-app-test` пересобран;
+  - тесты: unit — `meta_data` по типам, роутинг (`process_and_go_next`,
+    `go_back`, `_after_phone`), финализация; интеграционные — CRUD справочника,
+    привязки категории, `RequestOut.fields`, RESTRICT при удалении;
+  - прогон в `ubc-test-runner` (полный `pytest` без `-x`): **218 passed**
+    (89 unit + 129 integration), 3 мин; образы `ubc-app` и `ubc-app-test`
+    пересобраны, контейнеры backend/bot/test-runner пересозданы.
+

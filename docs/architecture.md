@@ -18,7 +18,7 @@
 | Роль | Где | Права |
 |---|---|---|
 | **admin** | frontend | пользователи, настройки, контент (категории/объекты), просмотр всех заявок (без обработки), бан посетителей, сессии/устройства |
-| **manager** | frontend | свои объекты (связь объект↔менеджер), обработка заявок по ним |
+| **manager** | frontend | свои объекты (связь объект↔менеджер) и объекты назначенных категорий (связь категория↔менеджер), обработка заявок по ним |
 | **visitor** | bot | регистрация, меню, PDF, заявки |
 
 ### Стек
@@ -65,7 +65,9 @@ repository/         SQLAlchemy async-репозитории (базовый + п
 domain/models/      ORM-модели
 di/                 провайдеры dishka: settings, db, redis, broker, repository, service, bot
 config/settings.py  pydantic-settings (префиксы POSTGRES_/REDIS_/RABBITMQ_/BACKEND_/BOT_/CONSUMER_/CORS_)
-bot/                aiogram: handlers/, keyboards.py (CallbackData), services.py, notifications.py
+bot/                aiogram: handlers/, keyboards.py (CallbackData), services.py,
+                    notifications.py, dialogs/ (динамический диалог заявки),
+                    widgets/ (RuCalendar), states.py (FSM-группы)
 db/                 движок, фабрика сессий (commit при успехе / rollback при ошибке)
 ```
 
@@ -78,13 +80,14 @@ DI-скоупы dishka: **APP** (engine, redis, broker, Bot, EventPublisher, Pdf
 ## 3. ER-модель
 
 ```
-users ──┬──< object_managers >── objects ──> categories
-        │                           │
-        ├──< devices ──< sessions   │
-        │                           │
-        │              requests >───┘
-        │                 │
-        └── (telegram_id) visitors ──< requests
+users ─┬─< object_managers >─ objects ─> categories ─┬─< category_managers >─ users
+       │                                  │          │
+       ├─< devices ─< sessions            │          └─< request_category_fields >─ request_available_fields
+       │                                  │                        │
+       │              requests >──────────┘                        │
+       │                 │                                         │
+       │                 └────────< request_fields >───────────────┘
+       └─ (telegram_id) visitors ──< requests
 
 settings (key/value, отдельная таблица)
 ```
@@ -94,14 +97,18 @@ settings (key/value, отдельная таблица)
 | **users** | id, username (unique), password_hash (bcrypt), role (admin/manager), telegram_id (nullable), is_active | персонал админки; telegram_id — для уведомлений |
 | **categories** | id, name, sort_order, is_active | уровень 1 меню |
 | **objects** | id, category_id FK, name, short_description, pdf_path, sort_order, is_active | уровень 2 меню; pdf_path — относительный путь в PDF-каталоге |
-| **object_managers** | object_id FK, user_id FK, PK(object_id, user_id) | какие менеджеры обслуживают объект |
+| **object_managers** | id, object_id FK, user_id FK, unique(object_id, user_id) | какие менеджеры обслуживают объект (прямая связь) |
+| **category_managers** | id, category_id FK, user_id FK, unique(category_id, user_id) | менеджер категории — доступ ко **всем** объектам категории; доступ к объекту = прямая связь ∪ связь категории |
 | **visitors** | id, telegram_id (unique), full_name, phone (nullable), consent_given, consent_at, is_blocked, blocked_at | посетители бота; phone — телефон из профиля (для диалога заявки) |
-| **requests** | id, visitor_id FK, object_id FK, phone, comment (nullable), start_date/start_time/end_date/end_time (nullable), status (enum), confirmed_at (nullable) | заявки; статусы: `new → approved → completed`, `new → rejected`, `new/approved → cancelled_by_customer`; даты/время — опциональны, зависят от флагов настроек |
+| **requests** | id, visitor_id FK, object_id FK, phone, status (enum), confirmed_at (nullable) | заявки; статусы: `new → approved/rejected`, `approved → completed`, `new/approved → cancelled_by_customer`; остальные данные — динамические поля (`request_fields`) |
+| **request_available_fields** | id, code (unique), type (enum `tp_request_field_type`: text/number/date/time/select), label, is_required_default, meta_data (JSONB, nullable) | справочник полей формы заявки; meta_data — параметры по типу: `{"options": [...]}` (SELECT), `{"minute_step": 15}` (TIME), `{"min","max"}` (NUMBER), `{"max_length": 500}` (TEXT) |
+| **request_category_fields** | id, category_id FK (CASCADE), field_id FK (CASCADE), sort_order, is_required, unique(category_id, field_id) | состав и порядок полей формы заявки категории |
+| **request_fields** | id, request_id FK (CASCADE), field_id FK (**RESTRICT**), value_text (String(1024), nullable), unique(request_id, field_id) | значения динамических полей конкретной заявки; RESTRICT сохраняет историю заявок |
 | **devices** | id, user_id FK, device_id (thumbmarkjs), user_agent, last_seen_at | устройства входа |
 | **sessions** | id, device_id FK, user_id FK, refresh_token_jti, is_active, revoked_at | refresh-сессии (ротация, отзыв) |
-| **settings** | key (PK), value | page_size (10), cancel_interval_hours (24), welcome_text, consent_text, is_use_time_in_request (false), is_use_end_date_in_request (false) |
+| **settings** | key (PK), value | page_size (10), cancel_interval_hours (24), welcome_text, consent_text |
 
-Миграции: `app/alembic/versions/` (9 миграций, async-движок). Запуск — см. §7.
+Миграции: `app/alembic/versions/` (16 миграций, async-движок). Запуск — см. §7.
 
 ---
 
@@ -118,13 +125,17 @@ settings (key/value, отдельная таблица)
 | `POST /auth/refresh` | cookie | ротация refresh (старый jti деактивируется) |
 | `POST /auth/logout` | cookie | blacklist обоих токенов, деактивация сессии |
 | `GET/POST/PATCH/DELETE /categories[/{id}]` | admin | CRUD категорий (+sort_order, is_active) |
+| `GET/PUT /categories/{id}/managers` | admin | менеджеры категории (доступ ко всем объектам категории) |
 | `GET/POST/PATCH/DELETE /objects[/{id}]` | admin | CRUD объектов |
-| `PUT /objects/{id}/managers` | admin | список менеджеров объекта |
+| `GET/PUT /objects/{id}/managers` | admin | список менеджеров объекта (только **прямые** связи) |
 | `PUT /objects/{id}/pdf` | admin | загрузка PDF (multipart, только application/pdf, ≤20 МБ) |
 | `GET /objects/{id}/pdf` | auth | отдача PDF (inline, открытие в новой вкладке) |
+| `GET/POST /request-fields`, `GET/PATCH/DELETE /request-fields/{id}` | admin | справочник полей заявки (валидация `meta_data` по типу; удаление со значениями заявок → 400, FK RESTRICT) |
+| `GET/PUT /request-fields/categories/{id}/fields` | admin | состав полей формы заявки категории (PUT — полный список, diff) |
 | `GET/POST/PATCH/DELETE /users[/{id}]` | admin | CRUD персонала (защита последнего admin, запрет самоудаления) |
 | `GET /visitors`, `POST /visitors/{id}/block`, `/unblock` | admin | посетители: поиск/фильтры, бан/разбан |
-| `GET /requests` | admin/manager | список; менеджер — только по своим объектам; фильтры статус/объект/дата |
+| `GET /requests` | admin/manager | список; менеджер — только по своим объектам (прямые ∪ категории); фильтры статус/объект/дата (`created_at`); в `RequestOut.fields` — значения динамических полей |
+| `GET /requests/{id}` | admin/manager | карточка заявки (тот же `RequestOut`) |
 | `POST /requests/{id}/status` | manager объекта | переходы: new→approved/rejected, approved→completed; публикует событие для уведомления посетителя |
 | `GET /devices` | admin | устройства, фильтр по пользователю |
 | `GET /sessions`, `POST /sessions/{id}/revoke`, `POST /sessions/revoke-all` | admin | сессии и их отзыв |
@@ -145,18 +156,24 @@ settings (key/value, отдельная таблица)
   зарегистрированный → главное меню.
 - **Меню**: категории (пагинация page_size из settings) → объекты → карточка
   объекта (описание, «Получить PDF» → документ Telegram, «Создать заявку»).
-- **Заявка (диалог aiogram-dialog)**: телефон (из профиля `visitors.phone`
-  или новый: текст/контакт) → начальная дата (`RuCalendar` — русские месяцы/
-  дни недели, неделя с Пн) → часы/минуты начала (Select, минуты с шагом 5;
-  только при `is_use_time_in_request`) → дата окончания → время окончания
-  (только при `is_use_end_date_in_request`) → необязательный комментарий
-  («-» → пусто) → валидация (`end >= start`, при равных датах — полные
-  datetime) → статус `new` → уведомление менеджерам объекта.
-  Роутинг шагов динамический: флаги передаются в `start_data` при
-  `dialog_manager.start(...)`; кнопки «Назад» на вариативных шагах —
-  динамические `Button`. `setup_dialogs(dp)` вызывается в `bot/main.py`.
-- **Мои заявки**: список с пагинацией, статусы, отмена: `new` — всегда,
-  `approved` — в пределах `cancel_interval_hours` от `confirmed_at`.
+- **Заявка (динамический диалог aiogram-dialog)**: состав шагов задаёт админ
+  для категории объекта (`request_category_fields`). Порядок: телефон (из
+  профиля `visitors.phone` или новый — текст/контакт, `normalize_phone`) →
+  поля схемы по типу (`text`/`number` — `MessageInput`, `date` — `RuCalendar`,
+  `time` — часы+минуты `Select`, `select` — опции из `meta_data`) → `summary`
+  (проверка + «Отправить»). Состояния — по типу поля (`DynamicRequestSG`),
+  динамичность обеспечивает routing engine: `process_and_go_next` (ответ →
+  шаг +1 → переключение по типу следующего поля, конец схемы → `summary`),
+  `go_back` (по `current_step - 1`), для TIME — `temp_hour` между окнами.
+  Валидация по типам: TEXT — `max_length`, NUMBER — int/float + `min`/`max`,
+  SELECT — значение из опций, «-»/«Пропустить» — только для необязательных;
+  обязательные поля проверяются на `summary` (незаполненные → alert).
+  Финализация — `BotService.create_request(visitor, object_id, phone, values)`:
+  `Request` (status=new) + bulk `RequestField` одной транзакцией → уведомление
+  менеджерам объекта. Пустая схема → сразу `summary`.
+- **Мои заявки**: список с пагинацией, статусы, значения динамических полей
+  (`label: value`), отмена: `new` — всегда, `approved` — в пределах
+  `cancel_interval_hours` от `confirmed_at`.
 - FSM хранится в Redis (`RedisStorage`, key builder с bot_id и destiny).
 
 ### Callback-схема
@@ -177,8 +194,8 @@ settings (key/value, отдельная таблица)
 | Событие (routing key) | Издатель | Получатель |
 |---|---|---|
 | `bot.notify.registration` | bot (регистрация посетителя) | все admin с telegram_id |
-| `bot.notify.request.created` | bot (создание заявки) | менеджеры объекта |
-| `bot.notify.request.cancelled` | bot (отмена посетителем) | менеджеры объекта |
+| `bot.notify.request.created` | bot (создание заявки) | менеджеры объекта (прямые + категория объекта) |
+| `bot.notify.request.cancelled` | bot (отмена посетителем) | менеджеры объекта (прямые + категория объекта) |
 | `bot.notify.request.status` | backend (смена статуса заявки) | посетитель заявки |
 
 Особенности: telegram_id не указан → пропуск (не ошибка); ошибка отправки
@@ -217,16 +234,18 @@ admin → PUT /objects/{id}/pdf (multipart) → PdfService: валидация (
 
 ### Заявка (полный цикл)
 ```
-посетитель: бот «Создать заявку» → диалог aiogram-dialog
-        (телефон из профиля/новый → даты RuCalendar → время Select
-        → комментарий; шаги зависят от флагов settings)
-        → requests (new, phone, comment, start/end date/time)
-        → publish bot.notify.request.created → менеджерам объекта
+админ:   frontend /fields → справочник полей (code, type, label, meta_data)
+         frontend /categories → «Поля заявки»: состав + sort_order + is_required
+посетитель: бот «Создать заявку» → dialog_manager.start(input_phone,
+            start_data={"schema": поля категории объекта, "answers": {}})
+        → телефон из профиля/новый → шаги по типу поля → summary
+        → requests (new, phone) + request_fields (request_id, field_id, value_text)
+        → publish bot.notify.request.created → менеджерам объекта (прямо + категория)
 менеджер:  frontend POST /requests/{id}/status (approved/rejected/completed)
         → БД → publish bot.notify.request.status → посетителю
 посетитель: отмена (new всегда; approved в пределах cancel_interval_hours)
         → статус cancelled_by_customer → publish bot.notify.request.cancelled
-        → менеджерам объекта
+        → менеджерам объекта (прямо + категория)
 ```
 
 ---
@@ -277,7 +296,26 @@ structlog: console (dev) / JSON (prod), уровень — по `PROJECT_ENVIRON
 - PDF открывается в новой вкладке с cookies — работает только на том же домене,
   что и админка (иначе httpOnly cookies не отправятся);
 - `crypto.subtle` (thumbmarkjs) недоступен вне secure context — есть фолбэк
-  FNV-1a-хеш для HTTP-разработки.
+  FNV-1a-хеш для HTTP-разработки;
+- **SQLAlchemy async + сериализация**: любые relationship, к которым обращается
+  pydantic-схема, обязаны быть загружены eagerly (`selectinload`). Значения
+  динамических полей отдаются как `value.field.code/label`, поэтому заявки
+  читаются через `RequestRepository.get_with_values()` / `list_page` со связкой
+  `selectinload(Request.values).selectinload(RequestField.field)`; ленивая
+  загрузка даёт `MissingGreenlet` при сборке ответа;
+- **`session.delete()` без flush**: ограничение FK (RESTRICT при удалении поля
+  справочника со значениями) всплывает только на `commit`, когда HTTP-ответ
+  уже сформирован. Такие места требуют явного `await session.flush()` внутри
+  try/except `IntegrityError` (см. `DELETE /request-fields/{id}`);
+- **тесты и незавершённые транзакции**: фикстура `_cleanup_db` делает
+  `TRUNCATE ... RESTART IDENTITY CASCADE` (ACCESS EXCLUSIVE lock, `lock_timeout`
+  не задан). Блокировка вечна, если мешает незавершённая транзакция — ошибка в
+  тесте после выхода из DI-скоупа (сериализация ответа) оставляет открытую
+  транзакцию в соединении пула — либо **второй прогон pytest** на той же тестовой
+  БД. Защита: `pytest-timeout` (`timeout = 120` в `app/pyproject.toml`) прерывает
+  висящий тест; правила — один прогон за раз, после обрыва `docker exec`
+  проверять `docker top ubc-test-runner`; признаки блокировки — `pg_stat_activity`
+  (`state`, `wait_event`, `xact_age`).
 
 ### Тесты
 
@@ -290,13 +328,15 @@ docker compose --env-file .env.test -f docker-compose.test.yml run --rm db-updat
 docker exec ubc-test-runner /app/.venv/bin/python -m pytest tests -q
 ```
 
-- **unit** (`app/tests/unit/`): валидаторы, схемы, настройки (включая флаги
-  `is_use_time_in_request` / `is_use_end_date_in_request`), токены, PDF,
-  генераторы времени (часы 00–23, минуты с шагом 5), тексты `RuCalendar`,
-  валидация/агрегация диалога заявки;
+- **unit** (`app/tests/unit/`): валидаторы, схемы, настройки (`AppSettingsService`),
+  токены, пароли, PDF, генераторы времени (часы 00–23, минуты по `minute_step`),
+  тексты `RuCalendar`, роутинг динамического диалога (`process_and_go_next`,
+  `go_back`, `_after_phone`, TIME → `input_time_hour`);
 - **integration** (`app/tests/integration/`): репозитории и API на реальной
-  тестовой БД (auth, categories/objects/users/visitors/requests/settings,
-  PDF, sessions/devices); фикстуры `visitor` (с `phone`), `request_obj`
-  (с `start/end` датами/временем); TRUNCATE всех таблиц и flushdb redis
-  после каждого теста;
-- текущий прогон: **211 passed**.
+  тестовой БД (auth, categories/objects/users/visitors/requests, request-fields
+  и привязки к категории, settings, PDF, sessions/devices); фикстуры `visitor`
+  (с `phone`), `field_text`/`field_time`, `category_with_fields`, `request_obj`
+  (со значениями полей); TRUNCATE всех таблиц и flushdb redis после каждого теста;
+- `pytest-timeout` (`timeout = 120` в `app/pyproject.toml`) — висящий тест
+  прерывается по таймауту, прогон не зависает;
+- текущий прогон: **218 passed** (89 unit + 129 integration), ~3 мин.

@@ -51,7 +51,14 @@
         <tbody>
           <tr v-for="req in items" :key="req.id">
             <td>#{{ req.id }}</td>
-            <td>{{ objectName(req.object_id) }}</td>
+            <td>
+              <NuxtLink
+                :to="{ path: '/objects', query: { open: req.object_id } }"
+                class="text-primary-600 hover:underline"
+              >
+                {{ objectName(req.object_id) }}
+              </NuxtLink>
+            </td>
             <td class="whitespace-nowrap">{{ req.phone }}</td>
             <td class="max-w-72">
               <template v-if="req.fields.length">
@@ -120,6 +127,7 @@ interface Obj {
 }
 
 const auth = useAuth()
+const route = useRoute()
 const { api, page } = useApi()
 
 const items = ref<Req[]>([])
@@ -174,6 +182,11 @@ async function setStatus(req: Req, status: string) {
 }
 
 onMounted(async () => {
+  // deep-link из дашборда: ?status=new — предустановить фильтр статуса
+  const qs = route.query.status
+  if (typeof qs === 'string' && ['new', 'approved', 'rejected', 'completed', 'cancelled_by_customer'].includes(qs)) {
+    filters.value.status = qs
+  }
   await load()
   try {
     const p = await page<Obj>('/objects', { limit: 1000 })

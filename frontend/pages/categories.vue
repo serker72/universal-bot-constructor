@@ -2,7 +2,7 @@
   <div>
     <div class="mb-4 flex items-center justify-between">
       <h1 class="page-title">Категории</h1>
-      <button class="btn-primary" @click="openCreate">Добавить</button>
+      <button v-if="isAdmin" class="btn-primary" @click="openCreate">Добавить</button>
     </div>
 
     <div class="card overflow-x-auto">
@@ -12,7 +12,7 @@
             <th>Название</th>
             <th class="w-24">Порядок</th>
             <th class="w-28">Активна</th>
-            <th class="w-40">Действия</th>
+            <th v-if="isAdmin" class="w-40">Действия</th>
           </tr>
         </thead>
         <tbody>
@@ -24,7 +24,7 @@
                 {{ cat.is_active ? 'Да' : 'Нет' }}
               </span>
             </td>
-            <td class="space-x-2 whitespace-nowrap">
+            <td v-if="isAdmin" class="space-x-2 whitespace-nowrap">
               <button class="btn-secondary" @click="openEdit(cat)">Изменить</button>
               <button class="btn-secondary" @click="openManagers(cat)">Менеджеры</button>
               <button class="btn-secondary" @click="openFields(cat)">Поля заявки</button>
@@ -32,7 +32,7 @@
             </td>
           </tr>
           <tr v-if="!items.length">
-            <td colspan="4" class="py-6 text-center text-gray-400">Категорий пока нет</td>
+            <td :colspan="isAdmin ? 4 : 3" class="py-6 text-center text-gray-400">Категорий пока нет</td>
           </tr>
         </tbody>
       </table>
@@ -143,6 +143,7 @@ interface Category {
 
 const { api, page } = useApi()
 const { managers, loadManagers } = useManagers()
+const isAdmin = useAuth().isAdmin
 
 const items = ref<Category[]>([])
 const total = ref(0)
@@ -324,7 +325,8 @@ async function saveManagers() {
 }
 
 onMounted(async () => {
-  await loadManagers()
+  // список менеджеров нужен только для admin-модалок назначения
+  if (isAdmin.value) await loadManagers()
 })
 
 await load()

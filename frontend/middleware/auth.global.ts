@@ -1,7 +1,9 @@
 // Глобальный middleware: доступ к страницам по роли
 // (роль сверяется с сервером через /auth/me — не доверяем localStorage)
 
-const ADMIN_ONLY = ['/categories', '/objects', '/fields', '/users', '/visitors', '/devices', '/sessions', '/settings']
+// /categories и /objects менеджеру доступны на чтение (backend фильтрует
+// по доступным объектам/категориям), запись — по-прежнему только admin
+const ADMIN_ONLY = ['/fields', '/users', '/visitors', '/devices', '/sessions', '/settings']
 
 export default defineNuxtRouteMiddleware(async (to) => {
   const auth = useAuth()

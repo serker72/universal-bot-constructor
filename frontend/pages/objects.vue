@@ -2,7 +2,7 @@
   <div>
     <div class="mb-4 flex items-center justify-between">
       <h1 class="page-title">Объекты</h1>
-      <button class="btn-primary" @click="openCreate">Добавить</button>
+      <button v-if="isAdmin" class="btn-primary" @click="openCreate">Добавить</button>
     </div>
 
     <div class="mb-4 max-w-xs">
@@ -42,9 +42,12 @@
             </td>
             <td class="space-x-2 whitespace-nowrap">
               <button v-if="obj.has_pdf" class="btn-secondary" @click="openPdf(obj)">PDF</button>
-              <button class="btn-secondary" @click="openEdit(obj)">Изменить</button>
-              <button class="btn-secondary" @click="openManagers(obj)">Менеджеры</button>
-              <button class="btn-danger" @click="remove(obj)">Удалить</button>
+              <template v-if="isAdmin">
+                <button class="btn-secondary" @click="openEdit(obj)">Изменить</button>
+                <button class="btn-secondary" @click="openManagers(obj)">Менеджеры</button>
+                <button class="btn-danger" @click="remove(obj)">Удалить</button>
+              </template>
+              <button v-else class="btn-secondary" @click="openView(obj)">Просмотр</button>
             </td>
           </tr>
           <tr v-if="!items.length">
@@ -57,36 +60,40 @@
       </div>
     </div>
 
-    <!-- Редактирование объекта -->
-    <UiModal :open="modal" :title="form.id ? 'Изменить объект' : 'Новый объект'" @close="modal = false">
+    <!-- Редактирование объекта (manager — режим просмотра) -->
+    <UiModal
+      :open="modal"
+      :title="readOnly ? 'Объект' : form.id ? 'Изменить объект' : 'Новый объект'"
+      @close="modal = false"
+    >
       <form class="space-y-4" @submit.prevent="save">
         <div>
           <label class="label" for="form-cat">Категория</label>
-          <select id="form-cat" v-model.number="form.category_id" class="input" required>
+          <select id="form-cat" v-model.number="form.category_id" class="input" required :disabled="readOnly">
             <option v-for="cat in categories" :key="cat.id" :value="cat.id">{{ cat.name }}</option>
           </select>
         </div>
         <div>
           <label class="label" for="form-name">Название</label>
-          <input id="form-name" v-model="form.name" class="input" required maxlength="255" />
+          <input id="form-name" v-model="form.name" class="input" required maxlength="255" :disabled="readOnly" />
         </div>
         <div>
           <label class="label" for="form-desc">Краткое описание (HTML/Markdown)</label>
-          <textarea id="form-desc" v-model="form.short_description" class="input min-h-24"></textarea>
+          <textarea id="form-desc" v-model="form.short_description" class="input min-h-24" :disabled="readOnly"></textarea>
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>
             <label class="label" for="form-sort">Порядок</label>
-            <input id="form-sort" v-model.number="form.sort_order" class="input" type="number" />
+            <input id="form-sort" v-model.number="form.sort_order" class="input" type="number" :disabled="readOnly" />
           </div>
           <label class="mt-6 flex items-center gap-2 text-sm">
-            <input v-model="form.is_active" type="checkbox" class="h-4 w-4" />
+            <input v-model="form.is_active" type="checkbox" class="h-4 w-4" :disabled="readOnly" />
             Активен
           </label>
         </div>
 
         <!-- PDF: при создании загрузится сразу после сохранения -->
-        <div>
+        <div v-if="!readOnly">
           <label class="label" for="form-pdf">
             PDF-файл (до 20 МБ)<span v-if="!form.id" class="font-normal text-gray-400"> — загрузится после сохранения</span>
           </label>
@@ -113,8 +120,20 @@
 
         <p v-if="formError" class="text-sm text-red-600">{{ formError }}</p>
         <div class="flex justify-end gap-2">
-          <button class="btn-secondary" type="button" @click="modal = false">Отмена</button>
-          <button class="btn-primary" type="submit" :disabled="saving">Сохранить</button>
+          <button class="btn-secondary" type="button" @click="modal = false">
+            {{ readOnly ? 'Закрыть' : 'Отмена' }}
+          </button>
+          <button
+            v-if="readOnly && form.has_pdf"
+            class="btn-primary"
+            type="button"
+            @click="openPdf({ id: form.id } as Obj)"
+          >
+            Открыть PDF
+          </button>
+          <button v-else-if="!readOnly" class="btn-primary" type="submit" :disabled="saving">
+            Сохранить
+          </button>
         </div>
       </form>
     </UiModal>
@@ -159,6 +178,10 @@ interface Obj {
 
 const { api, page, baseURL } = useApi()
 const { managers, loadManagers } = useManagers()
+const auth = useAuth()
+const isAdmin = auth.isAdmin
+const route = useRoute()
+const router = useRouter()
 
 const categories = ref<Category[]>([])
 const items = ref<Obj[]>([])
@@ -168,11 +191,12 @@ const offset = ref(0)
 const filterCategory = ref<number | null>(null)
 
 const modal = ref(false)
+const readOnly = ref(false)
 const saving = ref(false)
 const uploading = ref(false)
 const formError = ref('')
 const pdfFile = ref<File | null>(null)
-const form = ref({ id: 0, category_id: 0, name: '', short_description: '', sort_order: 0, is_active: true })
+const form = ref({ id: 0, category_id: 0, name: '', short_description: '', sort_order: 0, is_active: true, has_pdf: false })
 
 const managersModal = ref(false)
 const selectedManagers = ref<number[]>([])
@@ -205,7 +229,9 @@ function openCreate() {
     short_description: '',
     sort_order: items.value.length,
     is_active: true,
+    has_pdf: false,
   }
+  readOnly.value = false
   pdfFile.value = null
   formError.value = ''
   modal.value = true
@@ -213,6 +239,16 @@ function openCreate() {
 
 function openEdit(obj: Obj) {
   form.value = { ...obj }
+  readOnly.value = false
+  pdfFile.value = null
+  formError.value = ''
+  modal.value = true
+}
+
+/** Режим просмотра (manager, deep-link из заявок) */
+function openView(obj: Obj) {
+  form.value = { ...obj }
+  readOnly.value = true
   pdfFile.value = null
   formError.value = ''
   modal.value = true
@@ -317,6 +353,25 @@ async function remove(obj: Obj) {
   }
 }
 
+/** Deep-link /objects?open={id} — открыть карточку объекта (режим просмотра) */
+async function openFromQuery() {
+  const raw = Number(route.query.open)
+  if (!Number.isInteger(raw) || raw <= 0) return
+  // убираем параметр, чтобы модалка не открывалась повторно при навигации
+  router.replace({ path: '/objects', query: {} })
+  let obj = items.value.find((o) => o.id === raw)
+  if (!obj) {
+    try {
+      obj = await api<Obj>(`/objects/${raw}`)
+    } catch (err) {
+      // объект недоступен (чужой/удалён) — остаёмся на списке
+      console.warn('[objects] deep-link object not available', err)
+      return
+    }
+  }
+  openView(obj)
+}
+
 onMounted(async () => {
   try {
     const p = await page<Category>('/categories', { limit: 1000 })
@@ -326,6 +381,7 @@ onMounted(async () => {
     console.warn('[objects] failed to load categories', err)
   }
   await load()
-  await loadManagers()
+  if (isAdmin.value) await loadManagers()
+  await openFromQuery()
 })
 </script>

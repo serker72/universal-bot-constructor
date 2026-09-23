@@ -89,6 +89,8 @@ const adminMenu = [
 
 const managerMenu = [
   { to: '/dashboard', label: 'Дашборд', icon: 'dashboard' },
+  { to: '/categories', label: 'Категории', icon: 'folder' },
+  { to: '/objects', label: 'Объекты', icon: 'cube' },
   { to: '/requests', label: 'Заявки', icon: 'clipboard' },
 ]
 

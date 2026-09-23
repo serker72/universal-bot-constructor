@@ -3,8 +3,17 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from app.domain.models import Category, Session, User, UserRole
+from app.domain.models import (
+    Category,
+    CategoryManager,
+    Object,
+    ObjectManager,
+    Session,
+    User,
+    UserRole,
+)
 from app.repository.category import CategoryRepository
+from app.repository.object import ObjectRepository
 from app.repository.session import SessionRepository
 from app.repository.setting import SettingRepository
 from app.repository.user import UserRepository
@@ -131,6 +140,99 @@ async def test_category_crud_and_pagination(db):
     await repo.delete(cats[0])
     await db.commit()
     assert await repo.count() == 2
+
+
+# --- Доступ менеджеров (объекты и категории) ---------------------------------
+
+
+async def _make_manager(db, username: str) -> User:
+    repo = UserRepository(db)
+    user = await repo.add(
+        User(username=username, password_hash="h", role=UserRole.MANAGER)
+    )
+    await db.flush()
+    return user
+
+
+async def test_manager_object_ids_direct_and_via_category(db):
+    """Объекты менеджера: прямая связь ∪ объекты назначенной категории."""
+    categories = CategoryRepository(db)
+    objects = ObjectRepository(db)
+    manager = await _make_manager(db, "m-objects")
+
+    cat_a = await categories.add(Category(name="A", sort_order=1))
+    cat_b = await categories.add(Category(name="B", sort_order=2))
+    cat_c = await categories.add(Category(name="C", sort_order=3))
+    await db.flush()
+    obj_a = await objects.add(Object(category_id=cat_a.id, name="a1", sort_order=1))
+    obj_b = await objects.add(Object(category_id=cat_b.id, name="b1", sort_order=1))
+    obj_c = await objects.add(Object(category_id=cat_c.id, name="c1", sort_order=1))
+    await db.flush()
+
+    # категория A — назначена менеджеру (объект a1 доступен через неё),
+    # объект b1 — прямая связь, cat_c/obj_c — чужие
+    db.add(CategoryManager(category_id=cat_a.id, user_id=manager.id))
+    db.add(ObjectManager(object_id=obj_b.id, user_id=manager.id))
+    await db.commit()
+
+    assert await objects.list_manager_object_ids(manager.id) == [obj_a.id, obj_b.id]
+    # у другого менеджера доступ пустой
+    other = await _make_manager(db, "m-none")
+    await db.commit()
+    assert await objects.list_manager_object_ids(other.id) == []
+
+
+async def test_manager_category_ids_direct_and_via_object(db):
+    """Категории менеджера: назначенные напрямую ∪ категории его объектов."""
+    categories = CategoryRepository(db)
+    objects = ObjectRepository(db)
+    manager = await _make_manager(db, "m-categories")
+
+    cat_a = await categories.add(Category(name="A", sort_order=1))
+    cat_b = await categories.add(Category(name="B", sort_order=2))
+    cat_c = await categories.add(Category(name="C", sort_order=3))
+    await db.flush()
+    obj_c = await objects.add(Object(category_id=cat_c.id, name="c1", sort_order=1))
+    await db.flush()
+
+    db.add(CategoryManager(category_id=cat_a.id, user_id=manager.id))
+    db.add(ObjectManager(object_id=obj_c.id, user_id=manager.id))
+    await db.commit()
+
+    # cat_b не видна: ни назначения, ни объекта в ней
+    assert await categories.list_manager_category_ids(manager.id) == [
+        cat_a.id,
+        cat_c.id,
+    ]
+
+
+async def test_object_access_manager_ids(db):
+    """Менеджеры объекта для обработки заявок: прямые ∪ менеджеры категории."""
+    categories = CategoryRepository(db)
+    objects = ObjectRepository(db)
+    direct = await _make_manager(db, "m-direct")
+    via_category = await _make_manager(db, "m-category")
+    unrelated = await _make_manager(db, "m-unrelated")
+
+    category = await categories.add(Category(name="A", sort_order=1))
+    await db.flush()
+    obj = await objects.add(Object(category_id=category.id, name="a1", sort_order=1))
+    await db.flush()
+
+    db.add_all(
+        [
+            ObjectManager(object_id=obj.id, user_id=direct.id),
+            CategoryManager(category_id=category.id, user_id=via_category.id),
+        ]
+    )
+    await db.commit()
+
+    assert await objects.list_access_manager_ids(obj.id) == sorted(
+        [direct.id, via_category.id]
+    )
+    assert unrelated.id not in await objects.list_access_manager_ids(obj.id)
+    # объект отсутствует
+    assert await objects.list_access_manager_ids(999999) == []
 
 
 # --- SettingRepository -------------------------------------------------------

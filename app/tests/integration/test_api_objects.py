@@ -1,4 +1,8 @@
-"""Интеграционные тесты API объектов (CRUD + назначение менеджеров)."""
+"""Интеграционные тесты API объектов.
+
+CRUD и назначение менеджеров — только admin; менеджер читает свои объекты
+(прямые связи ∪ объекты назначенных категорий).
+"""
 
 from tests.integration.conftest import API
 
@@ -8,9 +12,67 @@ async def test_list_unauthenticated_401(client):
     assert resp.status_code == 401
 
 
-async def test_manager_forbidden(manager_client):
+async def test_manager_sees_nothing_without_assignment(manager_client, obj):
+    """Без назначений менеджер не видит ни списка, ни объект по id."""
     resp = await manager_client.get(f"{API}/objects")
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 0
+
+    resp = await manager_client.get(f"{API}/objects/{obj.id}")
+    assert resp.status_code == 404
+
+
+async def test_manager_sees_own_object_by_direct_link(
+    admin_client, manager_client, manager_user, obj
+):
+    """Прямая связь объект↔менеджер -> объект в списке и доступен по id."""
+    resp = await admin_client.put(
+        f"{API}/objects/{obj.id}/managers",
+        json={"user_ids": [manager_user.id]},
+    )
+    assert resp.status_code == 200
+
+    resp = await manager_client.get(f"{API}/objects")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert [o["id"] for o in body["items"]] == [obj.id]
+
+    resp = await manager_client.get(f"{API}/objects/{obj.id}")
+    assert resp.status_code == 200
+
+
+async def test_manager_sees_objects_of_assigned_category(
+    admin_client, manager_client, manager_user, category, obj, object_data
+):
+    """Назначение категории -> все объекты категории доступны менеджеру."""
+    resp = await admin_client.post(
+        f"{API}/objects",
+        json={**object_data, "category_id": category.id, "name": "second"},
+    )
+    assert resp.status_code == 201
+    second_id = resp.json()["id"]
+
+    resp = await admin_client.put(
+        f"{API}/categories/{category.id}/managers",
+        json={"user_ids": [manager_user.id]},
+    )
+    assert resp.status_code == 200
+
+    resp = await manager_client.get(f"{API}/objects")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 2
+    assert {o["id"] for o in body["items"]} == {obj.id, second_id}
+
+
+async def test_write_manager_403(manager_client, category, object_data):
+    """Создание объекта — только admin (чтение менеджеру доступно, запись нет)."""
+    resp = await manager_client.post(
+        f"{API}/objects", json={**object_data, "category_id": category.id}
+    )
     assert resp.status_code == 403
+    assert resp.json()["detail"] == "Admin only"
 
 
 async def test_create_and_get(admin_client, category, object_data):

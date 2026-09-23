@@ -1,4 +1,8 @@
-"""Интеграционные тесты API категорий (admin-only CRUD)."""
+"""Интеграционные тесты API категорий.
+
+CRUD — только admin; менеджер читает доступные категории (назначенные
+напрямую ∪ категории своих объектов).
+"""
 
 from tests.integration.conftest import API
 
@@ -8,8 +12,54 @@ async def test_list_unauthenticated_401(client):
     assert resp.status_code == 401
 
 
-async def test_access_manager_403(manager_client):
+async def test_manager_sees_nothing_without_assignment(manager_client, category):
+    """Без назначений менеджер не видит ни списка, ни категории по id."""
     resp = await manager_client.get(f"{API}/categories")
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 0
+
+    resp = await manager_client.get(f"{API}/categories/{category.id}")
+    assert resp.status_code == 404
+
+
+async def test_manager_sees_assigned_category(
+    admin_client, manager_client, manager_user, category
+):
+    """Прямое назначение категории -> категория видна менеджеру."""
+    resp = await admin_client.put(
+        f"{API}/categories/{category.id}/managers",
+        json={"user_ids": [manager_user.id]},
+    )
+    assert resp.status_code == 200
+
+    resp = await manager_client.get(f"{API}/categories")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total"] == 1
+    assert [c["id"] for c in body["items"]] == [category.id]
+
+    resp = await manager_client.get(f"{API}/categories/{category.id}")
+    assert resp.status_code == 200
+
+
+async def test_manager_sees_category_of_own_object(
+    admin_client, manager_client, manager_user, category, obj
+):
+    """Категория объекта с прямой связью объект↔менеджер — доступна."""
+    resp = await admin_client.put(
+        f"{API}/objects/{obj.id}/managers",
+        json={"user_ids": [manager_user.id]},
+    )
+    assert resp.status_code == 200
+
+    resp = await manager_client.get(f"{API}/categories")
+    assert resp.status_code == 200
+    assert [c["id"] for c in resp.json()["items"]] == [category.id]
+
+
+async def test_write_manager_403(manager_client, category_data):
+    """Создание категории — только admin (чтение менеджеру доступно, запись нет)."""
+    resp = await manager_client.post(f"{API}/categories", json=category_data)
     assert resp.status_code == 403
     assert resp.json()["detail"] == "Admin only"
 

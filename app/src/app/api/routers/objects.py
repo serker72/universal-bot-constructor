@@ -1,10 +1,15 @@
-"""Роутер объектов (admin: CRUD; менеджеры объекта — admin)."""
+"""Роутер объектов.
+
+- admin — CRUD, назначение менеджеров;
+- manager — чтение своих объектов (прямые связи ∪ объекты категорий).
+"""
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import asc
 from sqlalchemy.exc import IntegrityError
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 
+from app.api.access import visible_object_ids
 from app.api.deps import AdminUser, get_or_404
 from app.api.managers_sync import sync_managers
 from app.api.schemas.common import Page
@@ -15,7 +20,7 @@ from app.api.schemas.object import (
     ObjectOut,
     ObjectUpdateIn,
 )
-from app.domain.models import Object
+from app.domain.models import Object, User
 from app.repository.object import ObjectRepository
 from app.repository.user import UserRepository
 from app.services.pdf import PdfService
@@ -32,16 +37,20 @@ def _to_out(obj: Object) -> ObjectOut:
 
 @router.get("", response_model=Page[ObjectOut])
 async def list_objects(
-    _admin: FromDishka[AdminUser],
+    user: FromDishka[User],
     repo: FromDishka[ObjectRepository],
     category_id: int | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> Page[ObjectOut]:
-    """Список объектов (фильтр по категории, сортировка по sort_order)."""
+    """Список объектов (admin — все; менеджер — свои; фильтр по категории)."""
     conditions = []
     if category_id is not None:
         conditions.append(Object.category_id == category_id)
+    object_ids = await visible_object_ids(user, repo)
+    if object_ids is not None:
+        # пустой список → пустая выборка (SQLAlchemy рендерит пустое IN как ложь)
+        conditions.append(Object.id.in_(object_ids))
     items = await repo.find(
         *conditions,
         limit=limit,
@@ -85,11 +94,14 @@ async def create_object(
 @router.get("/{object_id}", response_model=ObjectOut)
 async def get_object(
     object_id: int,
-    _admin: FromDishka[AdminUser],
+    user: FromDishka[User],
     repo: FromDishka[ObjectRepository],
 ) -> ObjectOut:
-    """Получить объект."""
+    """Получить объект (менеджер — только свой)."""
     obj = get_or_404(await repo.get(object_id), "Object not found")
+    object_ids = await visible_object_ids(user, repo)
+    if object_ids is not None and obj.id not in object_ids:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Object not found")
     return _to_out(obj)
 
 

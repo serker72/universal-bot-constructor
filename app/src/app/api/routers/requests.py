@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 
+from app.api.access import visible_object_ids
 from app.api.deps import get_or_404
 from app.api.schemas.common import Page
 from app.api.schemas.request import RequestOut, RequestStatusIn
@@ -39,15 +40,6 @@ def _to_out(req: Request) -> RequestOut:
     return out
 
 
-async def _visible_object_ids(
-    user: User, objects: ObjectRepository
-) -> list[int] | None:
-    """None — все объекты (admin), список — объекты менеджера."""
-    if user.role == UserRole.ADMIN:
-        return None
-    return await objects.list_manager_object_ids(user.id)
-
-
 @router.get("", response_model=Page[RequestOut])
 async def list_requests(
     user: FromDishka[User],
@@ -61,7 +53,7 @@ async def list_requests(
     offset: int = 0,
 ) -> Page[RequestOut]:
     """Список заявок (менеджер — только по своим объектам)."""
-    object_ids = await _visible_object_ids(user, objects)
+    object_ids = await visible_object_ids(user, objects)
     items, total = await repo.list_page(
         object_ids=object_ids,
         status=status_filter,
@@ -90,7 +82,7 @@ async def get_request(
     req = get_or_404(
         await repo.get_with_values(request_id), "Request not found"
     )
-    object_ids = await _visible_object_ids(user, objects)
+    object_ids = await visible_object_ids(user, objects)
     if object_ids is not None and req.object_id not in object_ids:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Request not found")
     return _to_out(req)

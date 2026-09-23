@@ -2,9 +2,9 @@
 
 from collections.abc import Sequence
 
-from sqlalchemy import asc
+from sqlalchemy import asc, select
 
-from app.domain.models import Category, CategoryManager
+from app.domain.models import Category, CategoryManager, Object, ObjectManager
 from app.repository.base import BaseRepository
 from app.repository.manager_link import ManagerLinkMixin, link_entity
 
@@ -24,3 +24,19 @@ class CategoryRepository(BaseRepository[Category], ManagerLinkMixin):
             offset=offset,
             order_by=asc(Category.sort_order),
         )
+
+    async def list_manager_category_ids(self, user_id: int) -> list[int]:
+        """Id категорий, доступных менеджеру: назначенные напрямую
+        (category_managers) ∪ категории объектов с прямой связью
+        (object_managers) — т.е. категории всех доступных объектов."""
+        direct = await self.session.scalars(
+            select(CategoryManager.category_id).where(
+                CategoryManager.user_id == user_id
+            )
+        )
+        via_objects = await self.session.scalars(
+            select(Object.category_id)
+            .join(ObjectManager, ObjectManager.object_id == Object.id)
+            .where(ObjectManager.user_id == user_id)
+        )
+        return sorted(set(direct) | set(via_objects))

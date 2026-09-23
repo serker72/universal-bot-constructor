@@ -1,9 +1,15 @@
-"""Роутер категорий (admin)."""
+"""Роутер категорий.
+
+- admin — CRUD, назначение менеджеров;
+- manager — чтение доступных категорий (назначенные напрямую ∪ категории
+  своих объектов).
+"""
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import asc
 from dishka.integrations.fastapi import DishkaRoute, FromDishka
 
+from app.api.access import visible_category_ids
 from app.api.deps import AdminUser, get_or_404
 from app.api.managers_sync import sync_managers
 from app.api.schemas.category import (
@@ -14,7 +20,7 @@ from app.api.schemas.category import (
     CategoryUpdateIn,
 )
 from app.api.schemas.common import Page
-from app.domain.models import Category
+from app.domain.models import Category, User
 from app.repository.category import CategoryRepository
 from app.repository.object import ObjectRepository
 from app.repository.user import UserRepository
@@ -25,18 +31,24 @@ router = APIRouter(prefix="/categories", route_class=DishkaRoute, tags=["categor
 
 @router.get("", response_model=Page[CategoryOut])
 async def list_categories(
-    _admin: FromDishka[AdminUser],
+    user: FromDishka[User],
     repo: FromDishka[CategoryRepository],
     limit: int = 50,
     offset: int = 0,
 ) -> Page[CategoryOut]:
-    """Список категорий (сортировка по sort_order, id)."""
+    """Список категорий (admin — все; менеджер — доступные)."""
+    conditions = []
+    category_ids = await visible_category_ids(user, repo)
+    if category_ids is not None:
+        # пустой список → пустая выборка (SQLAlchemy рендерит пустое IN как ложь)
+        conditions.append(Category.id.in_(category_ids))
     items = await repo.find(
+        *conditions,
         limit=limit,
         offset=offset,
         order_by=asc(Category.sort_order),
     )
-    total = await repo.count()
+    total = await repo.count(*conditions)
     return Page(
         items=[CategoryOut.model_validate(c) for c in items],
         total=total,
@@ -62,13 +74,16 @@ async def create_category(
 @router.get("/{category_id}", response_model=CategoryOut)
 async def get_category(
     category_id: int,
-    _admin: FromDishka[AdminUser],
+    user: FromDishka[User],
     repo: FromDishka[CategoryRepository],
 ) -> CategoryOut:
-    """Получить категорию."""
+    """Получить категорию (менеджер — только доступную)."""
     category = get_or_404(
         await repo.get(category_id), "Category not found"
     )
+    category_ids = await visible_category_ids(user, repo)
+    if category_ids is not None and category.id not in category_ids:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Category not found")
     return CategoryOut.model_validate(category)
 
 

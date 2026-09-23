@@ -7,7 +7,7 @@
       </p>
     </div>
 
-    <div v-if="auth.isAdmin.value" class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <NuxtLink
         v-for="card in cards"
         :key="card.to"
@@ -18,7 +18,17 @@
           <div>
             <div class="text-sm font-medium text-gray-500">{{ card.label }}</div>
             <div class="mt-2 text-3xl font-semibold tracking-tight text-gray-900">
-              {{ card.count ?? '—' }}
+              <template v-if="card.countNew !== undefined">
+                <NuxtLink
+                  :to="{ path: '/requests', query: { status: 'new' } }"
+                  class="hover:underline"
+                  :class="{ 'text-amber-600': card.countNew > 0 }"
+                  @click.stop
+                >{{ card.countNew ?? '—' }}</NuxtLink>
+                <span class="mx-1 text-xl text-gray-400">/</span>
+                <span>{{ card.count ?? '—' }}</span>
+              </template>
+              <template v-else>{{ card.count ?? '—' }}</template>
             </div>
           </div>
           <div
@@ -28,24 +38,15 @@
             <AppIcon :name="card.icon" class="text-white" />
           </div>
         </div>
+        <div class="mt-1 flex items-center gap-1 text-[11px] text-gray-400">
+          <template v-if="card.countNew !== undefined">
+            новые / все
+          </template>
+        </div>
         <div class="mt-4 flex items-center gap-1 text-xs font-medium text-primary-600 opacity-0 transition group-hover:opacity-100">
           Перейти
           <AppIcon name="forward" size="sm" />
         </div>
-      </NuxtLink>
-    </div>
-
-    <div v-else class="card p-8 text-center">
-      <div class="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary-50">
-        <AppIcon name="clipboard" class="h-7 w-7 text-primary-600" />
-      </div>
-      <h2 class="text-lg font-semibold text-gray-900">Вы вошли как менеджер</h2>
-      <p class="mx-auto mt-1 max-w-sm text-sm text-gray-500">
-        Вам доступны заявки по вашим объектам: подтверждение, отклонение и выполнение.
-      </p>
-      <NuxtLink to="/requests" class="btn-primary mt-6">
-        <AppIcon name="clipboard" size="sm" />
-        Перейти к заявкам
       </NuxtLink>
     </div>
   </div>
@@ -59,13 +60,18 @@ const counts = ref({
   categories: null as number | null,
   objects: null as number | null,
   requests: null as number | null,
+  requestsNew: null as number | null,
 })
 
 onMounted(async () => {
-  if (!auth.isAdmin.value) return
-  const load = async (url: string, key: 'categories' | 'objects' | 'requests') => {
+  // обе роли: backend отдаёт менеджеру только его объекты/категории/заявки
+  const load = async (
+    url: string,
+    key: 'categories' | 'objects' | 'requests' | 'requestsNew',
+    params: Record<string, unknown> = {},
+  ) => {
     try {
-      const p = await page<Record<string, unknown>>(url, { limit: 1 })
+      const p = await page<Record<string, unknown>>(url, { limit: 1, ...params })
       counts.value[key] = p.total
     } catch (err) {
       console.warn('[dashboard] stats load failed', err)
@@ -75,13 +81,19 @@ onMounted(async () => {
     load('/categories', 'categories'),
     load('/objects', 'objects'),
     load('/requests', 'requests'),
+    // новые заявки — отдельным запросом с фильтром по статусу
+    load('/requests', 'requestsNew', { status_filter: 'new' }),
   ])
 })
 
-const cards = computed(() => [
-  { to: '/categories', label: 'Категории', icon: 'folder', tint: 'bg-gradient-to-br from-sky-400 to-sky-600', count: counts.value.categories },
-  { to: '/objects', label: 'Объекты', icon: 'cube', tint: 'bg-gradient-to-br from-violet-400 to-violet-600', count: counts.value.objects },
-  { to: '/requests', label: 'Заявки', icon: 'clipboard', tint: 'bg-gradient-to-br from-amber-400 to-amber-600', count: counts.value.requests },
-  { to: '/settings', label: 'Настройки', icon: 'cog', tint: 'bg-gradient-to-br from-slate-400 to-slate-600', count: null },
-])
+// менеджеру «Настройки» недоступны
+const cards = computed(() => {
+  const all = [
+    { to: '/categories', label: 'Категории', icon: 'folder', tint: 'bg-gradient-to-br from-sky-400 to-sky-600', count: counts.value.categories },
+    { to: '/objects', label: 'Объекты', icon: 'cube', tint: 'bg-gradient-to-br from-violet-400 to-violet-600', count: counts.value.objects },
+    { to: '/requests', label: 'Заявки', icon: 'clipboard', tint: 'bg-gradient-to-br from-amber-400 to-amber-600', count: counts.value.requests, countNew: counts.value.requestsNew },
+    { to: '/settings', label: 'Настройки', icon: 'cog', tint: 'bg-gradient-to-br from-slate-400 to-slate-600', count: null },
+  ]
+  return auth.isAdmin.value ? all : all.filter((c) => c.to !== '/settings')
+})
 </script>

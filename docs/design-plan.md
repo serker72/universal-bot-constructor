@@ -815,21 +815,17 @@ Unit:
 
 ### 5. Unit-тест логики отмены заявок (can_cancel)
 
-`requests.cancel_interval_hours` используется в `BotService.can_cancel`
-(`app/src/app/bot/services.py`): статус `new` — отмена всегда; статус
-`approved` — только пока `now(UTC) <= confirmed_at + интервал`; иные
-статусы — нельзя. Тесты геттера — в `tests/unit/test_app_settings.py`.
-Отдельного unit-теста `can_cancel` с моками нет (был заявлен в Шаге 7).
-
-**План**: `tests/unit/test_can_cancel.py` — на моках `app_settings`
-(без БД):
-- `new` → True;
-- `approved`, `confirmed_at` в пределах интервала → True;
-- `approved`, интервал истёк → False;
-- `approved`, `confirmed_at is None` → False;
-- `rejected` / `completed` / `cancelled_by_customer` → False;
+**Статус: выполнено (23.09.2026).** `tests/unit/test_can_cancel.py` —
+на моках `app_settings` (без БД), 11 тестов:
+- `new` → True; `rejected` / `completed` / `cancelled_by_customer` → False;
+- `approved`: в пределах интервала → True, истёк → False,
+  `confirmed_at is None` → False;
 - граница: `now` ровно `confirmed_at + интервал` → True;
-- интервал из настроек (0 часов → approved нельзя отменить сразу).
+- интервал из настроек: 0 — отмена сразу недоступна; суб-часовой
+  (30 мин: 20 — можно, 40 — нельзя); невалидное значение → дефолт 1440.
+
+Далее интервал переведён с часов на минуты (см. справку ниже) —
+тесты адаптированы; прогон: 117 unit + 15 integration passed.
 
 ### Использование интервала отмены (справка)
 

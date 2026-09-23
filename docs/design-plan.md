@@ -625,7 +625,7 @@ Unit:
 
 ## Доступ менеджера к категориям и объектам (frontend)
 
-**Статус: в плане (22.09.2026).**
+**Статус: выполнено (23.09.2026).**
 
 ### Задача
 
@@ -1052,4 +1052,38 @@ Unit:
   - прогон в `ubc-test-runner` (полный `pytest` без `-x`): **218 passed**
     (89 unit + 129 integration), 3 мин; образы `ubc-app` и `ubc-app-test`
     пересобраны, контейнеры backend/bot/test-runner пересозданы.
+- **Доступ менеджера к категориям и объектам (frontend)** — выполнено
+  (23.09.2026):
+  - backend: `app/src/app/api/access.py` — общие хелперы
+    `visible_object_ids` / `visible_category_ids` (admin → `None` = без
+    фильтрации; менеджер → список доступных); `GET /objects`,
+    `GET /objects/{id}`, `GET /categories`, `GET /categories/{id}` — вместо
+    `AdminUser` обычный `User`, менеджеру отдаются только доступные
+    (404 для чужих, пустой список без назначений); все мутации (POST/PATCH/
+    DELETE, PUT /*/managers, загрузка PDF, поля категории) — по-прежнему
+    admin-only (`AdminUser`);
+  - `CategoryRepository.list_manager_category_ids(user_id)` — категории,
+    назначенные напрямую (`category_managers`) ∪ категории объектов
+    с прямой связью (`object_managers`);
+  - frontend: middleware — `/categories` и `/objects` убраны из
+    `ADMIN_ONLY`; меню менеджера — добавлены «Категории» и «Объекты»;
+    `/requests` — колонка «Объект»: наименование + ссылка
+    `NuxtLink` на `/objects?open={id}` (fallback `#{id}` при недоступном
+    объекте); `/objects` — deep-link `?open={id}` (модалка карточки
+    в режиме просмотра) и read-only режим менеджера (поля disabled,
+    «Открыть PDF», скрыты «Добавить»/«Изменить»/«Удалить»/«Менеджеры»);
+    `/categories` — read-only (скрыты кнопки действий и колонка
+    «Действия»); `/dashboard` — карточки-счётчики для обеих ролей
+    (у менеджера без «Настроек»), заглушка «Вы вошли как менеджер»
+    убрана;
+  - тесты: 92 unit + 138 integration passed (прогон в `ubc-test-runner`
+    батчами: репозитории/категории/объекты — 44, auth/users/visitors — 38,
+    requests/request-fields/pdf — 36, sessions/devices/settings — 20);
+    новые интеграционные: менеджер без назначений — пустой список/404,
+    прямая связь объекта и назначение категории — видимость, запись — 403;
+    репозитории — `list_manager_object_ids`, `list_manager_category_ids`,
+    `list_access_manager_ids` (прямые ∪ категорийные);
+  - образы `ubc-app:latest`, `ubc-app-test:latest`, `ubc-frontend:latest`
+    пересобраны; контейнеры backend/bot/frontend пересозданы, nginx
+    перезапущен; health 200, frontend отвечает.
 

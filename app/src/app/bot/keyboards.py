@@ -134,15 +134,19 @@ def objects_keyboard(category_id: int, items, page: int, total: int):
     return builder.as_markup()
 
 
-def object_keyboard(category_id: int, object_id: int):
-    """Страница объекта: PDF, заявка, назад (1 кнопка в строке)."""
+def object_keyboard(category_id: int, object_id: int, request_button_text: str | None = None):
+    """Страница объекта: PDF, заявка, назад (1 кнопка в строке).
+
+    ``request_button_text`` — текст кнопки создания заявки из категории
+    объекта (None/пустое — текст по умолчанию «Создать заявку»).
+    """
     builder = InlineKeyboardBuilder()
     builder.button(
         text="📄 Получить PDF",
         callback_data=ObjectActionCB(object_id=object_id).pack(),
     )
     builder.button(
-        text="📝 Создать заявку",
+        text=f"📝 {request_button_text or 'Создать заявку'}",
         callback_data=CreateRequestCB(object_id=object_id).pack(),
     )
     builder.adjust(1)

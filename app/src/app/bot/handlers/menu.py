@@ -6,6 +6,7 @@ from aiogram.types import CallbackQuery
 from aiogram.types import FSInputFile
 from dishka.integrations.aiogram import FromDishka
 
+from app.bot.html_sanitize import sanitize_html
 from app.bot.keyboards import (
     CategoryCB,
     MenuCB,
@@ -111,6 +112,35 @@ async def show_objects(
     await callback.answer()
 
 
+@router.callback_query(ObjectCB.filter(F.object_id.is_(None)))
+async def back_to_objects(
+    callback: CallbackQuery,
+    callback_data: ObjectCB,
+    bot_service: FromDishka[BotService],
+) -> None:
+    """Кнопка «К объектам»: список объектов категории (с пагинацией)."""
+    assert callback_data.category_id is not None  # гарантировано схемой
+    if not await ensure_visitor(callback, bot_service):
+        return
+    items, pages = await bot_service.list_objects(
+        callback_data.category_id, callback_data.page
+    )
+    if not items:
+        await callback.message.edit_text(  # type: ignore[union-attr]
+            "В этой категории пока нет объектов.",
+            reply_markup=back_to_categories_keyboard(),
+        )
+        await callback.answer()
+        return
+    await callback.message.edit_text(  # type: ignore[union-attr]
+        "Выберите объект:",
+        reply_markup=objects_keyboard(
+            callback_data.category_id, items, callback_data.page, pages
+        ),
+    )
+    await callback.answer()
+
+
 @router.callback_query(ObjectCB.filter(F.object_id.is_not(None)))
 async def show_object(
     callback: CallbackQuery,
@@ -123,10 +153,17 @@ async def show_object(
     if obj is None:
         await callback.answer("Объект не найден", show_alert=True)
         return
-    text = f"<b>{html.quote(obj.name)}</b>\n\n{html.quote(obj.short_description or 'Описание отсутствует.')}"
+    text = (
+        f"<b>{html.quote(obj.name)}</b>\n\n"
+        f"{sanitize_html(obj.short_description) or 'Описание отсутствует.'}"
+    )
     await callback.message.edit_text(  # type: ignore[union-attr]
         text,
-        reply_markup=object_keyboard(obj.category_id, obj.id),
+        reply_markup=object_keyboard(
+            obj.category_id,
+            obj.id,
+            request_button_text=obj.category.button_text,
+        ),
         parse_mode="HTML",
     )
     await callback.answer()

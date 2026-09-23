@@ -119,8 +119,8 @@ class BotService:
         return list(items), pages
 
     async def get_object(self, object_id: int) -> Object | None:
-        """Активный объект по id."""
-        obj = await self.objects.get(object_id)
+        """Активный объект по id (вместе с категорией — для текста кнопки)."""
+        obj = await self.objects.get_with_category(object_id)
         if obj is not None and obj.is_active:
             return obj
         return None

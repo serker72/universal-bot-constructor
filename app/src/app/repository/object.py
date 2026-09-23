@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 
 from sqlalchemy import asc, select
+from sqlalchemy.orm import selectinload
 
 from app.domain.models import CategoryManager, Object, ObjectManager
 from app.repository.base import BaseRepository
@@ -19,6 +20,15 @@ class ObjectRepository(BaseRepository[Object], ManagerLinkMixin):
     model = Object
     link_model = ObjectManager
     link_entity_attr = link_entity(ObjectManager.object_id)
+
+    async def get_with_category(self, object_id: int) -> Object | None:
+        """Объект по id вместе с категорией (eager-load, для бота)."""
+        stmt = (
+            select(Object)
+            .options(selectinload(Object.category))
+            .where(Object.id == object_id)
+        )
+        return (await self.session.scalars(stmt)).first()
 
     async def list_by_category(
         self,

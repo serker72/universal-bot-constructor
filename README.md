@@ -1,12 +1,14 @@
 # Универсальный конструктор меню бота Telegram
 
 Веб-админка + Telegram-бот для управления двухуровневым меню: **категории → объекты**.
-Объект содержит наименование, краткое описание (HTML/Markdown) и PDF с полным описанием,
+Объект содержит наименование, краткое описание (HTML) и PDF с полным описанием,
 который бот отправляет посетителю документом.
 
 - **Админка (Nuxt 3 SPA)** — управление контентом, пользователями, заявками, настройками.
 - **Бот (aiogram 3)** — регистрация посетителей (ФИО + согласие на обработку ПД),
   просмотр меню с пагинацией, получение PDF, создание/отмена заявок.
+  Форма заявки строится динамически по настраиваемым полям категории
+  (текст/число/дата/время/варианты).
 - **Уведомления** — через RabbitMQ: админам о регистрациях, менеджерам о заявках,
   посетителям о смене статуса заявки.
 
@@ -14,15 +16,15 @@
 
 | Роль | Где | Возможности |
 |---|---|---|
-| **admin** | админка | пользователи, настройки, категории/объекты, просмотр всех заявок, бан посетителей, сессии/устройства |
-| **manager** | админка | свои объекты, обработка заявок по ним (подтвердить/отклонить/выполнить) |
+| **admin** | админка | пользователи, настройки, справочник полей заявки, категории/объекты (CRUD), просмотр всех заявок, бан посетителей, сессии/устройства |
+| **manager** | админка | чтение своих категорий и объектов (прямые связи + назначенные категории), обработка заявок по ним (подтвердить/отклонить/выполнить), дашборд |
 | **visitor** | бот | регистрация, меню, PDF, заявки |
 
 ## Технологии
 
 - **Сервисы**: nginx, postgresql, pgbouncer, redis, rabbitmq (docker compose)
-- **Backend**: Python 3.13, uv, FastAPI, dishka, SQLAlchemy async, Alembic, faststream, structlog, PyJWT, bcrypt
-- **Bot**: aiogram 3 (FSM в Redis), aiohttp (опционально SOCKS-прокси)
+- **Backend**: Python 3.13, uv, FastAPI, dishka, SQLAlchemy async, Alembic, faststream, structlog, PyJWT, bcrypt, nh3 (санитизация HTML)
+- **Bot**: aiogram 3 (FSM в Redis), aiogram-dialog (динамическая форма заявки), aiohttp (опционально SOCKS-прокси)
 - **Frontend**: Nuxt 3, TailwindCSS, thumbmarkjs
 - **Авторизация**: JWT access+refresh в httpOnly cookies, сессии на устройства, blacklist в Redis
 
@@ -96,6 +98,18 @@ cd frontend && npm install && npm run dev
 Основные группы: `PROJECT_*`, `POSTGRES_*`, `REDIS_*`, `RABBITMQ_*`, `BACKEND_*`
 (JWT-секрет, каталог PDF), `CONSUMER_*` (очереди и routing keys уведомлений),
 `BOT_*` (токен, прокси, webhook). Секреты в git не попадают.
+
+## Тесты
+
+```bash
+# инфраструктура + test-runner (тестовая БД и очереди из .env.test)
+docker compose -f docker-compose.srv.yml up -d
+docker compose --env-file .env.test -f docker-compose.test.yml up -d test-runner
+docker compose --env-file .env.test -f docker-compose.test.yml run --rm db-update-test
+
+# полный прогон (unit + integration, ~3 мин)
+docker exec ubc-test-runner sh -c "cd /app && python -m pytest tests/unit tests/integration -q"
+```
 
 ## Документация
 

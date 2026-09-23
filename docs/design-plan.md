@@ -813,15 +813,48 @@ Unit:
   пересобраны; контейнеры backend/bot/frontend пересозданы, nginx
   перезапущен; health 200.
 
-### Использование интервала отмены (справка)
+### 5. Unit-тест логики отмены заявок (can_cancel)
 
 `requests.cancel_interval_hours` используется в `BotService.can_cancel`
 (`app/src/app/bot/services.py`): статус `new` — отмена всегда; статус
 `approved` — только пока `now(UTC) <= confirmed_at + интервал`; иные
-статусы — нельзя. Тесты: `tests/unit/test_app_settings.py` — геттер
-(дефолт 24, парсинг "12", невалидное/отрицательное → дефолт, 0 валиден).
-Отдельного unit-теста `can_cancel` с моками сейчас нет (ранее был в
-плане Шага 7) — при необходимости добавить.
+статусы — нельзя. Тесты геттера — в `tests/unit/test_app_settings.py`.
+Отдельного unit-теста `can_cancel` с моками нет (был заявлен в Шаге 7).
+
+**План**: `tests/unit/test_can_cancel.py` — на моках `app_settings`
+(без БД):
+- `new` → True;
+- `approved`, `confirmed_at` в пределах интервала → True;
+- `approved`, интервал истёк → False;
+- `approved`, `confirmed_at is None` → False;
+- `rejected` / `completed` / `cancelled_by_customer` → False;
+- граница: `now` ровно `confirmed_at + интервал` → True;
+- интервал из настроек (0 часов → approved нельзя отменить сразу).
+
+### Использование интервала отмены (справка)
+
+`requests.cancel_interval_minutes` (бывший `..._hours`, миграция
+`4093e5d13bac` — ключ переименован, значение ×60) используется в
+`BotService.can_cancel` (`app/src/app/bot/services.py`): статус `new` —
+отмена всегда; статус `approved` — только пока
+`now(UTC) <= confirmed_at + интервал`; иные статусы — нельзя.
+
+**Семантика подтверждена (23.09.2026)**: интервал отсчитывается **от
+момента подтверждения менеджером** (`confirmed_at` = `now(UTC)` при
+`POST /requests/{id}/status` со статусом approved), а не от времени
+заявки. Варианты привязки ко времени заявки (по динамическому полю
+`visit_date`/`visit_time` — гибрид) отклонены. Тексты подсказок
+(`/settings` helper, подпись поля) формулировать однозначно:
+«сколько минут **после подтверждения** заявки менеджером посетитель
+может её отменить».
+
+**Тесты**: `tests/unit/test_app_settings.py` — геттер (дефолт 1440,
+парсинг, невалидное/отрицательное → дефолт, 0 валиден);
+`tests/unit/test_can_cancel.py` — логика отмены на моках настроек
+(статусы new/rejected/completed/cancelled; approved в пределах
+интервала / истёк / без confirmed_at; граница
+`now == confirmed_at + интервал`; интервал 0, суб-часовой 30 мин,
+невалид → дефолт 1440).
 
 ---
 

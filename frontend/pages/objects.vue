@@ -78,8 +78,11 @@
           <input id="form-name" v-model="form.name" class="input" required maxlength="255" :disabled="readOnly" />
         </div>
         <div>
-          <label class="label" for="form-desc">Краткое описание (HTML/Markdown)</label>
+          <label class="label" for="form-desc">Краткое описание (HTML)</label>
           <textarea id="form-desc" v-model="form.short_description" class="input min-h-24" :disabled="readOnly"></textarea>
+          <p class="mt-1 text-xs text-gray-400">
+            Допустимые теги: &lt;b&gt;, &lt;i&gt;, &lt;u&gt;, &lt;s&gt;, &lt;code&gt;, &lt;pre&gt;, &lt;a&gt;, &lt;blockquote&gt;, &lt;tg-spoiler&gt;
+          </p>
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>

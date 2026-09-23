@@ -47,6 +47,19 @@
           <label class="label" for="cat-name">Название</label>
           <input id="cat-name" v-model="form.name" class="input" required maxlength="255" />
         </div>
+        <div>
+          <label class="label" for="cat-button-text">Текст для кнопки "Создать заявку"</label>
+          <input
+            id="cat-button-text"
+            v-model="form.button_text"
+            class="input"
+            maxlength="64"
+            placeholder="Создать заявку"
+          />
+          <p class="mt-1 text-xs text-gray-400">
+            Текст кнопки на странице объекта в боте. Пусто — «Создать заявку».
+          </p>
+        </div>
         <div class="grid grid-cols-2 gap-4">
           <div>
             <label class="label" for="cat-sort">Порядок</label>
@@ -137,6 +150,7 @@
 interface Category {
   id: number
   name: string
+  button_text: string | null
   sort_order: number
   is_active: boolean
 }
@@ -152,7 +166,7 @@ const offset = ref(0)
 const modal = ref(false)
 const saving = ref(false)
 const formError = ref('')
-const form = ref({ id: 0, name: '', sort_order: 0, is_active: true })
+const form = ref({ id: 0, name: '', button_text: '', sort_order: 0, is_active: true })
 
 const managersModal = ref(false)
 const selectedManagers = ref<number[]>([])
@@ -248,13 +262,19 @@ function changeOffset(v: number) {
 }
 
 function openCreate() {
-  form.value = { id: 0, name: '', sort_order: items.value.length, is_active: true }
+  form.value = { id: 0, name: '', button_text: '', sort_order: items.value.length, is_active: true }
   formError.value = ''
   modal.value = true
 }
 
 function openEdit(cat: Category) {
-  form.value = { id: cat.id, name: cat.name, sort_order: cat.sort_order, is_active: cat.is_active }
+  form.value = {
+    id: cat.id,
+    name: cat.name,
+    button_text: cat.button_text ?? '',
+    sort_order: cat.sort_order,
+    is_active: cat.is_active,
+  }
   formError.value = ''
   modal.value = true
 }
@@ -265,6 +285,8 @@ async function save() {
   try {
     const body = {
       name: form.value.name,
+      // PATCH: null — не менять, "" — сброс на текст по умолчанию
+      button_text: form.value.button_text.trim(),
       sort_order: form.value.sort_order,
       is_active: form.value.is_active,
     }

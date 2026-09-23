@@ -485,7 +485,7 @@ dialog = Dialog(
     ),
     # -- Окно TIME: часы --------------------------------------------------------
     Window(
-        Format("{field_label}\n🕐 Выберите час:"),
+        Format("{field_label}\nВыберите час:"),
         _HOURS_ROW,
         _BACK_BUTTON,
         # CompositeGetter: данные поля (field_label) + список часов/минут
@@ -494,7 +494,7 @@ dialog = Dialog(
     ),
     # -- Окно TIME: минуты -------------------------------------------------------
     Window(
-        Format("{field_label}\n🕐 Выберите минуты:"),
+        Format("{field_label}\nВыберите минуты:"),
         _MINUTES_ROW,
         Button(
             Const("⬅️ К часам"),

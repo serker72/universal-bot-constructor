@@ -16,13 +16,18 @@
         <input id="st-cancel" v-model="form.cancel_hours" class="input" type="number" min="0" max="720" />
       </div>
       <div>
-        <label class="label" for="st-welcome">Текст приветствия бота</label>
+        <label class="label" for="st-welcome">Текст приветствия бота (HTML)</label>
         <textarea id="st-welcome" v-model="form.welcome_text" class="input min-h-20"></textarea>
       </div>
       <div>
-        <label class="label" for="st-consent">Текст согласия на обработку персональных данных</label>
+        <label class="label" for="st-consent">Текст согласия на обработку персональных данных (HTML)</label>
         <textarea id="st-consent" v-model="form.consent_text" class="input min-h-24"></textarea>
       </div>
+      <p class="text-xs text-gray-400">
+        В текстах приветствия и согласия допустима HTML-разметка Telegram:
+        &lt;b&gt;, &lt;i&gt;, &lt;u&gt;, &lt;s&gt;, &lt;code&gt;, &lt;pre&gt;, &lt;a&gt;, &lt;blockquote&gt;, &lt;tg-spoiler&gt;
+        (недопустимые теги автоматически удаляются).
+      </p>
       <p class="text-sm text-gray-500">
         Состав полей заявки (даты, время, варианты) настраивается по категориям
         на странице «Поля заявки».
@@ -44,8 +49,8 @@ const saving = ref(false)
 const saved = ref(false)
 const message = ref('')
 const form = ref({
-  page_size: '10',
-  cancel_hours: '24',
+  page_size: '10' as string | number,
+  cancel_hours: '24' as string | number,
   welcome_text: '',
   consent_text: '',
 })
@@ -68,12 +73,13 @@ async function save() {
   saving.value = true
   message.value = ''
   try {
+    // числовые поля v-model(type=number) дают number — API требует строки
     const out = await api<{ settings: Record<string, string> }>('/settings', {
       method: 'PUT',
       body: {
         settings: {
-          [KEY_PAGE]: form.value.page_size,
-          [KEY_CANCEL]: form.value.cancel_hours,
+          [KEY_PAGE]: String(form.value.page_size),
+          [KEY_CANCEL]: String(form.value.cancel_hours),
           [KEY_WELCOME]: form.value.welcome_text,
           [KEY_CONSENT]: form.value.consent_text,
         },

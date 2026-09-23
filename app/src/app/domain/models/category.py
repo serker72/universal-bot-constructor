@@ -1,5 +1,6 @@
 """Категории меню бота."""
 
+import sqlalchemy as sa
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.base import Base, TimestampMixin
@@ -12,6 +13,11 @@ class Category(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(nullable=False)
+    # Текст кнопки «Создать заявку» для объектов категории;
+    # NULL/пустое — текст по умолчанию «Создать заявку»
+    button_text: Mapped[str | None] = mapped_column(
+        sa.String(64), nullable=True, default=None
+    )
     sort_order: Mapped[int] = mapped_column(default=0, nullable=False)
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
 

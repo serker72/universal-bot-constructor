@@ -65,7 +65,10 @@ async def create_category(
 ) -> CategoryOut:
     """Создать категорию."""
     category = Category(
-        name=data.name, sort_order=data.sort_order, is_active=data.is_active
+        name=data.name,
+        button_text=data.button_text or None,
+        sort_order=data.sort_order,
+        is_active=data.is_active,
     )
     await repo.add(category)
     return CategoryOut.model_validate(category)
@@ -99,6 +102,9 @@ async def update_category(
     # PATCH-семантика: None (не передано) — поле не меняется
     if data.name is not None:
         category.name = data.name
+    if data.button_text is not None:
+        # "" — явный сброс на текст по умолчанию (NULL в БД)
+        category.button_text = data.button_text or None
     if data.sort_order is not None:
         category.sort_order = data.sort_order
     if data.is_active is not None:

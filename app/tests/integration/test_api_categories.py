@@ -124,6 +124,41 @@ async def test_update_missing_404(admin_client):
     assert resp.status_code == 404
 
 
+async def test_button_text_flow(admin_client, category_data):
+    """button_text: создание, изменение, сброс пустой строкой, null = не менять."""
+    # создание без button_text → None (текст по умолчанию в боте)
+    resp = await admin_client.post(f"{API}/categories", json=category_data)
+    category_id = resp.json()["id"]
+    assert resp.json()["button_text"] is None
+
+    # установка своего текста
+    resp = await admin_client.patch(
+        f"{API}/categories/{category_id}", json={"button_text": "Заказать столик"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["button_text"] == "Заказать столик"
+
+    # null — поле не меняется
+    resp = await admin_client.patch(
+        f"{API}/categories/{category_id}", json={"name": "new-name"}
+    )
+    assert resp.json()["button_text"] == "Заказать столик"
+
+    # "" — сброс на дефолт
+    resp = await admin_client.patch(
+        f"{API}/categories/{category_id}", json={"button_text": ""}
+    )
+    assert resp.json()["button_text"] is None
+
+
+async def test_button_text_create(admin_client, category_data):
+    resp = await admin_client.post(
+        f"{API}/categories", json={**category_data, "button_text": "Забронировать"}
+    )
+    assert resp.status_code == 201
+    assert resp.json()["button_text"] == "Забронировать"
+
+
 async def test_delete(admin_client, category_data):
     resp = await admin_client.post(
         f"{API}/categories", json={**category_data, "name": "to-delete"}

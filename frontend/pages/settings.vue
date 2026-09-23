@@ -11,9 +11,16 @@
       </div>
       <div>
         <label class="label" for="st-cancel">
-          Интервал отмены подтверждённой заявки, часов
+          Интервал отмены подтверждённой заявки после подтверждения, минут
         </label>
-        <input id="st-cancel" v-model="form.cancel_hours" class="input" type="number" min="0" max="720" />
+        <input id="st-cancel" v-model="form.cancel_minutes" class="input" type="number" min="0" />
+        <p class="mt-1 space-y-0.5 text-xs text-gray-400">
+          Сколько минут после подтверждения заявки менеджером предоставляется посетителю на её отмену.
+          <br>60 — 1 час
+          <br>1440 — 24 часа
+          <br>4320 — 3 дня
+          <br>0 — отмена недоступна
+        </p>
       </div>
       <div>
         <label class="label" for="st-welcome">Текст приветствия бота (HTML)</label>
@@ -50,20 +57,20 @@ const saved = ref(false)
 const message = ref('')
 const form = ref({
   page_size: '10' as string | number,
-  cancel_hours: '24' as string | number,
+  cancel_minutes: '1440' as string | number,
   welcome_text: '',
   consent_text: '',
 })
 
 const KEY_PAGE = 'bot.page_size'
-const KEY_CANCEL = 'requests.cancel_interval_hours'
+const KEY_CANCEL = 'requests.cancel_interval_minutes'
 const KEY_WELCOME = 'bot.welcome_text'
 const KEY_CONSENT = 'bot.consent_text'
 
 function apply(settings: Record<string, string>) {
   form.value = {
     page_size: settings[KEY_PAGE] ?? '10',
-    cancel_hours: settings[KEY_CANCEL] ?? '24',
+    cancel_minutes: settings[KEY_CANCEL] ?? '1440',
     welcome_text: settings[KEY_WELCOME] ?? '',
     consent_text: settings[KEY_CONSENT] ?? '',
   }
@@ -79,7 +86,7 @@ async function save() {
       body: {
         settings: {
           [KEY_PAGE]: String(form.value.page_size),
-          [KEY_CANCEL]: String(form.value.cancel_hours),
+          [KEY_CANCEL]: String(form.value.cancel_minutes),
           [KEY_WELCOME]: form.value.welcome_text,
           [KEY_CONSENT]: form.value.consent_text,
         },

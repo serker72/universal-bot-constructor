@@ -216,8 +216,8 @@ class BotService:
         if req.status == RequestStatus.NEW:
             return True
         if req.status == RequestStatus.APPROVED and req.confirmed_at is not None:
-            hours = await self.app_settings.get_cancel_interval_hours()
-            deadline = req.confirmed_at + timedelta(hours=hours)
+            minutes = await self.app_settings.get_cancel_interval_minutes()
+            deadline = req.confirmed_at + timedelta(minutes=minutes)
             return datetime.now(timezone.utc) <= deadline
         return False
 

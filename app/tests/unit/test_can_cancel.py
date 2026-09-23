@@ -11,8 +11,8 @@ import pytest
 from app.bot.services import BotService
 from app.domain.models import Request, RequestStatus
 from app.services.app_settings import (
-    DEFAULT_CANCEL_INTERVAL_HOURS,
-    KEY_CANCEL_INTERVAL_HOURS,
+    DEFAULT_CANCEL_INTERVAL_MINUTES,
+    KEY_CANCEL_INTERVAL_MINUTES,
     AppSettingsService,
 )
 
@@ -30,10 +30,10 @@ class FakeSettingRepository:
         self.values[key] = value
 
 
-def make_service(interval_hours: str) -> BotService:
+def make_service(interval_minutes: str) -> BotService:
     """BotService с настройкой интервала отмены (остальное — заглушки)."""
     settings = AppSettingsService(
-        FakeSettingRepository({KEY_CANCEL_INTERVAL_HOURS: interval_hours})
+        FakeSettingRepository({KEY_CANCEL_INTERVAL_MINUTES: interval_minutes})
     )
     return BotService(
         session=None,  # type: ignore[arg-type]
@@ -64,7 +64,8 @@ NOW = datetime(2026, 9, 23, 12, 0, 0, tzinfo=timezone.utc)
 
 @pytest.fixture
 def service() -> BotService:
-    return make_service("24")
+    # дефолт интервала — 1440 минут (24 часа)
+    return make_service("1440")
 
 
 @pytest.fixture(autouse=True)
@@ -144,8 +145,8 @@ async def test_interval_zero_disables_cancel():
 
 
 async def test_interval_from_settings():
-    # интервал 2 часа: подтверждена час назад — можно, три часа — нельзя
-    svc = make_service("2")
+    # интервал 120 минут: подтверждена час назад — можно, три часа — нельзя
+    svc = make_service("120")
     fresh = make_request(
         RequestStatus.APPROVED, confirmed_at=NOW - timedelta(hours=1)
     )
@@ -156,10 +157,23 @@ async def test_interval_from_settings():
     assert not await svc.can_cancel(stale)
 
 
+async def test_interval_30_minutes():
+    # суб-часовой интервал: 20 минут назад — можно, 40 минут — нельзя
+    svc = make_service("30")
+    fresh = make_request(
+        RequestStatus.APPROVED, confirmed_at=NOW - timedelta(minutes=20)
+    )
+    stale = make_request(
+        RequestStatus.APPROVED, confirmed_at=NOW - timedelta(minutes=40)
+    )
+    assert await svc.can_cancel(fresh)
+    assert not await svc.can_cancel(stale)
+
+
 async def test_default_interval_when_not_set():
-    svc = make_service("x-invalid")  # невалидное значение → дефолт 24
+    svc = make_service("x-invalid")  # невалидное значение → дефолт 1440 мин
     req = make_request(
         RequestStatus.APPROVED,
-        confirmed_at=NOW - timedelta(hours=DEFAULT_CANCEL_INTERVAL_HOURS - 1),
+        confirmed_at=NOW - timedelta(minutes=DEFAULT_CANCEL_INTERVAL_MINUTES - 1),
     )
     assert await svc.can_cancel(req)

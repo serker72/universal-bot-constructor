@@ -2,7 +2,7 @@
 
 Типизированный доступ к настройкам с значениями по умолчанию:
 - размер страницы меню бота (по умолчанию 10);
-- интервал отмены подтверждённой заявки в часах (по умолчанию 24);
+- интервал отмены подтверждённой заявки в минутах (по умолчанию 1440 = 24 ч);
 - текст согласия на обработку персональных данных;
 - текст приветствия бота.
 """
@@ -10,12 +10,12 @@
 from app.repository.setting import SettingRepository
 
 KEY_PAGE_SIZE = "bot.page_size"
-KEY_CANCEL_INTERVAL_HOURS = "requests.cancel_interval_hours"
+KEY_CANCEL_INTERVAL_MINUTES = "requests.cancel_interval_minutes"
 KEY_CONSENT_TEXT = "bot.consent_text"
 KEY_WELCOME_TEXT = "bot.welcome_text"
 
 DEFAULT_PAGE_SIZE = 10
-DEFAULT_CANCEL_INTERVAL_HOURS = 24
+DEFAULT_CANCEL_INTERVAL_MINUTES = 24 * 60
 DEFAULT_CONSENT_TEXT = (
     "Я даю согласие на обработку моих персональных данных "
     "(ФИО, номер телефона) в целях обработки заявок."
@@ -38,14 +38,14 @@ class AppSettingsService:
             return DEFAULT_PAGE_SIZE
         return value if value > 0 else DEFAULT_PAGE_SIZE
 
-    async def get_cancel_interval_hours(self) -> int:
-        """Интервал отмены подтверждённой заявки, часы."""
-        raw = await self.repo.get_value(KEY_CANCEL_INTERVAL_HOURS)
+    async def get_cancel_interval_minutes(self) -> int:
+        """Интервал отмены подтверждённой заявки, минуты."""
+        raw = await self.repo.get_value(KEY_CANCEL_INTERVAL_MINUTES)
         try:
-            value = int(raw) if raw is not None else DEFAULT_CANCEL_INTERVAL_HOURS
+            value = int(raw) if raw is not None else DEFAULT_CANCEL_INTERVAL_MINUTES
         except ValueError:
-            return DEFAULT_CANCEL_INTERVAL_HOURS
-        return value if value >= 0 else DEFAULT_CANCEL_INTERVAL_HOURS
+            return DEFAULT_CANCEL_INTERVAL_MINUTES
+        return value if value >= 0 else DEFAULT_CANCEL_INTERVAL_MINUTES
 
     async def get_consent_text(self) -> str:
         """Текст согласия на обработку персональных данных."""

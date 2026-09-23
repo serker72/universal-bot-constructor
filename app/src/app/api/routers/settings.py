@@ -6,7 +6,7 @@ from dishka.integrations.fastapi import DishkaRoute, FromDishka
 from app.api.deps import AdminUser
 from app.api.schemas.setting import SettingsIn, SettingsOut
 from app.services.app_settings import (
-    KEY_CANCEL_INTERVAL_HOURS,
+    KEY_CANCEL_INTERVAL_MINUTES,
     KEY_CONSENT_TEXT,
     KEY_PAGE_SIZE,
     KEY_WELCOME_TEXT,
@@ -15,7 +15,7 @@ from app.services.app_settings import (
 
 ALLOWED_KEYS = {
     KEY_PAGE_SIZE,
-    KEY_CANCEL_INTERVAL_HOURS,
+    KEY_CANCEL_INTERVAL_MINUTES,
     KEY_CONSENT_TEXT,
     KEY_WELCOME_TEXT,
 }

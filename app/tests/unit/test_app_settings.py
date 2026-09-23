@@ -3,11 +3,11 @@
 import pytest
 
 from app.services.app_settings import (
-    DEFAULT_CANCEL_INTERVAL_HOURS,
+    DEFAULT_CANCEL_INTERVAL_MINUTES,
     DEFAULT_CONSENT_TEXT,
     DEFAULT_PAGE_SIZE,
     DEFAULT_WELCOME_TEXT,
-    KEY_CANCEL_INTERVAL_HOURS,
+    KEY_CANCEL_INTERVAL_MINUTES,
     KEY_CONSENT_TEXT,
     KEY_PAGE_SIZE,
     KEY_WELCOME_TEXT,
@@ -42,7 +42,7 @@ def service(repo) -> AppSettingsService:
 
 async def test_defaults_when_empty(service: AppSettingsService):
     assert await service.get_page_size() == DEFAULT_PAGE_SIZE
-    assert await service.get_cancel_interval_hours() == DEFAULT_CANCEL_INTERVAL_HOURS
+    assert await service.get_cancel_interval_minutes() == DEFAULT_CANCEL_INTERVAL_MINUTES
     assert await service.get_consent_text() == DEFAULT_CONSENT_TEXT
     assert await service.get_welcome_text() == DEFAULT_WELCOME_TEXT
 
@@ -50,12 +50,12 @@ async def test_defaults_when_empty(service: AppSettingsService):
 async def test_values_from_repo(service: AppSettingsService, repo):
     repo.values = {
         KEY_PAGE_SIZE: "5",
-        KEY_CANCEL_INTERVAL_HOURS: "12",
+        KEY_CANCEL_INTERVAL_MINUTES: "720",
         KEY_CONSENT_TEXT: "Согласие",
         KEY_WELCOME_TEXT: "Привет!",
     }
     assert await service.get_page_size() == 5
-    assert await service.get_cancel_interval_hours() == 12
+    assert await service.get_cancel_interval_minutes() == 720
     assert await service.get_consent_text() == "Согласие"
     assert await service.get_welcome_text() == "Привет!"
 
@@ -76,18 +76,18 @@ async def test_page_size_invalid_falls_back(service, raw, expected):
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        ("abc", DEFAULT_CANCEL_INTERVAL_HOURS),
-        ("-5", DEFAULT_CANCEL_INTERVAL_HOURS),
+        ("abc", DEFAULT_CANCEL_INTERVAL_MINUTES),
+        ("-5", DEFAULT_CANCEL_INTERVAL_MINUTES),
     ],
 )
 async def test_cancel_interval_invalid_falls_back(service, raw, expected):
-    service.repo.values = {KEY_CANCEL_INTERVAL_HOURS: raw}
-    assert await service.get_cancel_interval_hours() == expected
+    service.repo.values = {KEY_CANCEL_INTERVAL_MINUTES: raw}
+    assert await service.get_cancel_interval_minutes() == expected
 
 
 async def test_cancel_interval_zero_is_valid(service, repo):
-    repo.values = {KEY_CANCEL_INTERVAL_HOURS: "0"}
-    assert await service.get_cancel_interval_hours() == 0
+    repo.values = {KEY_CANCEL_INTERVAL_MINUTES: "0"}
+    assert await service.get_cancel_interval_minutes() == 0
 
 
 async def test_set_delegates_to_repo(service: AppSettingsService, repo):

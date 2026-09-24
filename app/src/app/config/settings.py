@@ -10,11 +10,16 @@
   load_dotenv просто ничего не делает.
 """
 
+import re
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Секрет webhook (setWebhook.secret_token): 1–256 символов A-Z, a-z, 0-9, _ и -
+WEBHOOK_SECRET_RE = re.compile(r"[A-Za-z0-9_-]{1,256}")
 
 # Корень проекта: app/src/app/config/settings.py -> parents[4]
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -33,7 +38,8 @@ class ProjectSettings(BaseSettings):
         extra="ignore",
     )
 
-    environment: str = "loc"          # loc / dev / prod
+    # loc / prod (выбирает docker-compose.nginx.{loc|prod}.yml); опечатка — ошибка старта
+    environment: Literal["loc", "prod"] = "loc"
     url_scheme: str = "http"          # http / https
     domain: str = "localhost"
     data_dir: Path = Path("/data/universal-bot-constructor")
@@ -288,7 +294,10 @@ class Settings(BaseSettings):
 
         - JWT-секрет обязателен (иначе токены подделываются);
         - в prod секрет не короче 32 байт;
-        - cookie_secure по умолчанию следует url_scheme (https → True).
+        - cookie_secure по умолчанию следует url_scheme (https → True);
+        - webhook бота: секрет — формат Bot API (1–256, A-Z a-z 0-9 _ -);
+          в prod при заданном BOT_WEBHOOK_BASE_URL — обязателен (иначе
+          поддельные апдейты на публичный /bot/webhook).
         """
         if not self.backend.jwt_secret:
             raise ValueError(
@@ -302,6 +311,22 @@ class Settings(BaseSettings):
             raise ValueError("BACKEND_JWT_SECRET в prod должен быть >= 32 байт")
         if self.backend.cookie_secure is None:
             self.backend.cookie_secure = self.project.url_scheme == "https"
+
+        secret = self.bot.webhook_secret
+        if secret and not WEBHOOK_SECRET_RE.fullmatch(secret):
+            raise ValueError(
+                "BOT_WEBHOOK_SECRET: 1–256 символов A-Z a-z 0-9 _ - "
+                "(требование Telegram Bot API); сгенерируйте: openssl rand -hex 32"
+            )
+        if (
+            self.project.environment == "prod"
+            and self.bot.webhook_base_url
+            and not secret
+        ):
+            raise ValueError(
+                "BOT_WEBHOOK_SECRET обязателен в prod при заданном "
+                "BOT_WEBHOOK_BASE_URL; сгенерируйте: openssl rand -hex 32"
+            )
         return self
 
 

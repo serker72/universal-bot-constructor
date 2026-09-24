@@ -12,9 +12,15 @@
 # должны существовать.
 #
 # Использование (из корня проекта):
-#   ./init-letsencrypt.sh             # выпуск (если настоящего сертификата ещё нет)
-#   ./init-letsencrypt.sh --staging   # тестовый CA Let's Encrypt (без лимитов)
-#   ./init-letsencrypt.sh --force     # перевыпуск при наличии сертификата
+#   ./init-letsencrypt.sh --staging   # сначала — тестовый CA Let's Encrypt (без лимитов)
+#   ./init-letsencrypt.sh             # боевой сертификат (staging заменяется автоматически)
+#   ./init-letsencrypt.sh --force     # принудительный перевыпуск
+#
+# Состояние определяется по renewal/<domain>.conf (поле server):
+#   none    -> выпуск в запрошенном режиме;
+#   режим совпадает -> no-op (с --force — перевыпуск);
+#   staging, запрошен боевой -> certbot delete + выпуск боевого;
+#   боевой, запрошен staging -> отказ (с --force — замена на staging).
 set -euo pipefail
 
 scriptDir=$(dirname -- "$(readlink -f -- "$0")")
@@ -26,14 +32,15 @@ for arg in "$@"; do
     case "$arg" in
         --staging) STAGING=1 ;;
         --force) FORCE=1 ;;
-        -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
         *) echo "Неизвестный аргумент: $arg" >&2; exit 2 ;;
     esac
 done
 
 compose() { docker compose "$@"; }
 # Команда в контейнере certbot (переменные PROJECT_DOMAIN/CERTBOT_EMAIL — из environment)
-certbot_sh() { compose run --rm --no-deps --entrypoint sh certbot -c "$1"; }
+# (-T: без TTY — чистый stdout для подстановки $(...))
+certbot_sh() { compose run --rm --no-deps -T --entrypoint sh certbot -c "$1"; }
 
 # --- проверки окружения ---
 if ! compose config --services | grep -qx certbot; then
@@ -48,10 +55,33 @@ certbot_sh '
     esac
 '
 
-# Настоящий сертификат уже есть (у временного нет renewal-конфига)
-if [ "$FORCE" -eq 0 ] && certbot_sh 'test -f "/etc/letsencrypt/renewal/$PROJECT_DOMAIN.conf"'; then
-    echo "Сертификат уже выпущен (перевыпуск: --force). Продление — сервис certbot."
-    exit 0
+# --- текущее состояние: none | staging | prod ---
+# (у временного самоподписанного сертификата renewal-конфига нет)
+state=$(certbot_sh '
+    f="/etc/letsencrypt/renewal/$PROJECT_DOMAIN.conf"
+    if [ ! -f "$f" ]; then echo none
+    elif grep -q "acme-staging" "$f"; then echo staging
+    else echo prod; fi
+')
+wanted=prod
+[ "$STAGING" -eq 1 ] && wanted=staging
+echo "### Сертификат: текущий — $state, запрошен — $wanted"
+
+force_arg=""
+if [ "$state" = "$wanted" ]; then
+    if [ "$FORCE" -eq 0 ]; then
+        echo "Сертификат ($state) уже выпущен (перевыпуск: --force). Продление — сервис certbot."
+        exit 0
+    fi
+    force_arg="--force-renewal"
+elif [ "$state" != none ]; then
+    # смена CA: staging -> prod — автоматически; prod -> staging — только с --force
+    if [ "$state" = prod ] && [ "$FORCE" -eq 0 ]; then
+        echo "Уже выпущен боевой сертификат; замена на staging — только с --force." >&2
+        exit 1
+    fi
+    echo "### Удаление сертификата $state (certbot delete)"
+    certbot_sh 'certbot delete --cert-name "$PROJECT_DOMAIN" --non-interactive'
 fi
 
 # --- 1. временный сертификат ---
@@ -68,7 +98,7 @@ certbot_sh '
 
 echo "### Запуск nginx"
 compose up -d nginx
-compose exec nginx nginx -t
+compose exec -T nginx nginx -t
 
 # --- 2. выпуск настоящего сертификата ---
 echo "### Удаление временного сертификата"
@@ -82,15 +112,13 @@ certbot_sh '
 echo "### Выпуск сертификата Let's Encrypt"
 staging_arg=""
 [ "$STAGING" -eq 1 ] && staging_arg="--staging"
-force_arg=""
-[ "$FORCE" -eq 1 ] && force_arg="--force-renewal"
 certbot_sh "certbot certonly --webroot -w /var/www/certbot \
     -d \"\$PROJECT_DOMAIN\" --email \"\$CERTBOT_EMAIL\" \
     --agree-tos --no-eff-email --non-interactive $staging_arg $force_arg"
 
 # --- 3. применение ---
 echo "### Перезагрузка nginx и запуск certbot (продление)"
-compose exec nginx nginx -s reload
+compose exec -T nginx nginx -s reload
 compose up -d certbot
 
 echo "Готово: https://$(certbot_sh 'printf %s "$PROJECT_DOMAIN"')"

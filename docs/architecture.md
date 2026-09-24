@@ -270,7 +270,7 @@ Nginx подключается по окружению: `docker-compose.yml` →
 
 | | loc | prod |
 |---|---|---|
-| шаблоны (`envsubst`) | `srv/nginx/templates/loc/default.conf.template` — :80, все location | `templates/prod/default.conf.template` — :80, ACME + 301 на https; `ssl.conf.template` — :443, TLS 1.2/1.3, HSTS |
+| шаблоны (`envsubst`) | `srv/nginx/templates/loc/default.conf.template` — :80, все location | `templates/prod/default.conf.template` — :80, ACME + 301 на https; `ssl.conf.template` — :443, TLS 1.2/1.3, HSTS 24 ч |
 | SSL | не используется | Let's Encrypt (webroot HTTP-01), `${CERTBOT_DATA_DIR}/{conf,www}` |
 | certbot | — | `certbot renew` каждые 12 ч |
 | reload nginx | — | каждые 6 ч (`srv/nginx/docker-entrypoint.d/40-reload-certs.sh`) |

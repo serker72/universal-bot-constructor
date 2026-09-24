@@ -95,6 +95,22 @@ docker compose up -d --build postgres pgbouncer redis rabbitmq backend bot front
 
 Продление автоматическое: certbot — `certbot renew` каждые 12 ч, nginx —
 `nginx -s reload` каждые 6 ч (`srv/nginx/docker-entrypoint.d/40-reload-certs.sh`).
+HSTS — `max-age=86400` (24 ч) на период ввода prod; после стабилизации —
+увеличить до `31536000` в `srv/nginx/templates/prod/ssl.conf.template`.
+
+### Чек-лист `.env` для prod
+
+| Переменная | Значение |
+|---|---|
+| `PROJECT_ENVIRONMENT` | `prod` (допустимы только `loc` / `prod` — иначе ошибка старта) |
+| `PROJECT_URL_SCHEME` / `PROJECT_DOMAIN` | `https` / боевой домен (DNS → сервер) |
+| `CERTBOT_EMAIL` | реальный e-mail (не `change_me`) |
+| `CORS_ORIGINS` | `["${PROJECT_URL_SCHEME}://${PROJECT_DOMAIN}"]` |
+| `SQLALCHEMY_DEBUG` | `False` (иначе SQL с параметрами — в логе) |
+| `BACKEND_JWT_SECRET` | `openssl rand -base64 64 \| tr -d '\n'` (≥ 32 байт) |
+| `BOT_WEBHOOK_BASE_URL` | `"${PROJECT_URL_SCHEME}://${PROJECT_DOMAIN}"` (пусто — long-polling) |
+| `BOT_WEBHOOK_SECRET` | `openssl rand -hex 32` — обязателен при webhook, формат `A-Z a-z 0-9 _ -` |
+| `POSTGRES_*`, `REDIS_*`, `RABBITMQ_*` пароли | сгенерированные, не из примера |
 
 ### Миграции
 

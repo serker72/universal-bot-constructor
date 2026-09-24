@@ -1404,3 +1404,20 @@ nginx не читает переменные окружения напрямую
     (HTTP → 301, HTTPS `/api/v1/health` → 200, фоновый reload срабатывает);
     `docker compose config` для loc и prod валиден; `create_admin` —
     на тестовой БД (создание, обновление, невалидный пароль, ошибка БД).
+- **Подготовка к prod (24.09.2026)** — выполнено:
+  - `PROJECT_ENVIRONMENT` — `Literal["loc", "prod"]` (опечатка/`dev` —
+    ошибка старта, а не неочевидный сбой `include` compose);
+  - `BOT_WEBHOOK_SECRET` (заголовок `X-Telegram-Bot-Api-Secret-Token`,
+    защита публичного `/bot/webhook` от поддельных апдейтов): формат Bot API
+    (1–256, `A-Z a-z 0-9 _ -`) проверяется всегда; в prod при заданном
+    `BOT_WEBHOOK_BASE_URL` — обязателен (fail-fast в `Settings`, как
+    `BACKEND_JWT_SECRET`); генерация — `openssl rand -hex 32` (base64 не
+    подходит: `+ / =`);
+  - `.env.example`: блок `BOT_WEBHOOK_*` с пояснениями;
+    `CORS_ORIGINS=["${PROJECT_URL_SCHEME}://${PROJECT_DOMAIN}"]` (также в `.env`);
+  - HSTS `max-age=86400` (24 ч) на период ввода prod;
+  - README — чек-лист `.env` для prod;
+  - unit `tests/unit/test_settings_validation.py`.
+  - прогон в `ubc-test-runner` (образы `ubc-app`, `ubc-app-test` пересобраны,
+    тестовая БД мигрирована до head `4093e5d13bac`): полный
+    `pytest tests/unit tests/integration` — **289 passed** за 3 мин 24 с.

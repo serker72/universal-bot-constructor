@@ -948,6 +948,118 @@ conftest) отменены как избыточные. При повторно�
 
 ---
 
+## Инфраструктура: nginx templates, SSL/Certbot, скрипт администратора
+
+Задачи (24.09.2026), обсуждены и приняты варианты реализации.
+
+**Статус: выполнено (24.09.2026).** Окружения — только `loc` и `prod`
+(`dev` пока игнорируется); в loc SSL не используется.
+
+### 1. PROJECT_DOMAIN в server_name — accepted
+
+nginx не читает переменные окружения напрямую — используется штатный
+механизм официального образа (`envsubst` из `/etc/nginx/templates`, см.
+п. 2): в `server_name ${PROJECT_DOMAIN} localhost;`. Значение
+домена/окружения остаётся в `.env` (`PROJECT_DOMAIN`,
+`PROJECT_ENVIRONMENT`, `PROJECT_URL_SCHEME`) — единственным источником.
+
+### 2. nginx: конфигурация через templates — accepted
+
+`/etc/nginx/templates/*.template` + стандартный entrypoint nginx
+(подстановка переменных окружения `envsubst` при старте →
+`/etc/nginx/conf.d/*.conf`).
+
+- каталог `srv/nginx/templates/` монтируется в `/etc/nginx/templates:ro`;
+- каталог `srv/nginx/snippets/` — переиспользуемые фрагменты
+  (`proxy_params.conf`, `proxy_websocket_params.conf`) — монтируется в
+  `/etc/nginx/snippets:ro`;
+- действующий `srv/nginx/conf/default.conf` переносится в
+  `templates/default.conf.template` с заменой жёстко зашитых имён на
+  `${PROJECT_DOMAIN}`;
+- переменные передаются через `environment:` nginx (`PROJECT_DOMAIN`).
+
+### 3. Разбиение default.conf на шаблоны loc/prod — accepted
+
+- `loc/default.conf.template` — сервер `listen 80`, все `location` из
+  текущего конфига (proxy на backend с `proxy_params.conf`, websocket на
+  frontend с `proxy_websocket_params.conf`; `client_max_body_size 25m` — в
+  `nginx.conf`); **в loc SSL не используется** — ни acme-location, ни
+  certbot, ни томов сертификатов;
+- `prod/default.conf.template` — сервер `listen 80`: acme-location
+  (`/.well-known/acme-challenge/` → `/var/www/certbot`) + редирект на HTTPS;
+- `prod/ssl.conf.template` — prod-сервер 443 (см. п. 4);
+- `snippets/proxy_params.conf` — `proxy_http_version 1.1`,
+  `proxy_set_header Host $host / X-Real-IP / X-Forwarded-For /
+  X-Forwarded-Proto`;
+- `snippets/proxy_websocket_params.conf` — то же + `Upgrade $http_upgrade`,
+  `Connection "upgrade"`, `proxy_read_timeout 3600s`.
+
+### 4. SSL — accepted (prod-only конфигурация)
+
+- сертификат выпускает certbot в webroot (`/.well-known/acme-challenge`);
+- шаблоны разнесены по `srv/nginx/templates/{loc,prod}/`; `ssl.conf.template`
+  есть только в `prod/`, поэтому в loc nginx не падает из-за отсутствия
+  файлов сертификата;
+- выбор окружения — без compose profiles: `docker-compose.yml` включает
+  `docker-compose.nginx.${PROJECT_ENVIRONMENT:-loc}.yml` (окружения loc и prod;
+  dev пока не поддерживается); nginx удалён из `docker-compose.srv.yml`;
+- содержимое: `listen 443 ssl http2`,
+  `ssl_certificate /etc/letsencrypt/live/${PROJECT_DOMAIN}/fullchain.pem`,
+  key — `privkey.pem`, TLSv1.2+1.3; внутри — те же `location`'ы, что в
+  `default.conf.template`; в prod `default.conf.template` (80) — только
+  acme-location + `return 301 https://$host$request_uri`;
+- nginx в prod (`docker-compose.nginx.prod.yml`) получает `443:443` и том
+  сертификатов; в loc — только `80:80`;
+- порядок старта: nginx `depends_on` frontend/backend/bot (вариант A) —
+  upstream'ы резолвятся при старте nginx; порядок файлов в `include` на
+  запуск не влияет (единая модель compose); отдельный запуск
+  `-f docker-compose.nginx.*.yml` не поддерживается;
+- сертификат — только на `${PROJECT_DOMAIN}` (без `www.`); при необходимости
+  www — DNS-запись + второй `-d` в `init-letsencrypt.sh` + `server_name` и
+  редирект www → apex;
+- первичный выпуск — `init-letsencrypt.sh` (корень проекта): проверка
+  `PROJECT_ENVIRONMENT=prod` и `CERTBOT_EMAIL != change_me` → временный
+  самоподписанный сертификат (nginx стартует) → удаление → `certbot certonly
+  --webroot` → `nginx -s reload` → `up -d certbot`; флаги `--staging`,
+  `--force`; повторный запуск при наличии `renewal/<domain>.conf` — no-op;
+- подхват продлённого сертификата — `srv/nginx/docker-entrypoint.d/40-reload-certs.sh`
+  (монтируется в `/docker-entrypoint.d/` только в prod): фоновый цикл
+  `nginx -s reload` каждые `NGINX_RELOAD_INTERVAL` (дефолт 6h).
+
+### 5. Certbot — accepted (prod-only сервис)
+
+- сервис `certbot` (образ `certbot/certbot:v2.11.0`) — только в
+  `docker-compose.nginx.prod.yml` (при `PROJECT_ENVIRONMENT=loc` не создаётся);
+- выпуск через webroot + бесконечный цикл продления (sleep 12h,
+  `certbot renew`);
+- тома (host-каталоги, без named-томов):
+  - `${CERTBOT_DATA_DIR}/www:/var/www/certbot` — общий с nginx (webroot);
+  - `${CERTBOT_DATA_DIR}/conf:/etc/letsencrypt` — сертификаты, общий с
+    nginx (ro);
+- параметры `.env`: `CERTBOT_DATA_DIR="${PROJECT_DATA_DIR}/certbot"`
+  (каталоги `conf/` и `www/` создаются на хосте заранее) и
+  `CERTBOT_EMAIL=change_me` (e-mail регистрации ACME, заменить в prod);
+  `PROJECT_DOMAIN` и `CERTBOT_EMAIL` передаются в `environment:` certbot и
+  используются при первичном выпуске (`certbot certonly --email "$CERTBOT_EMAIL"`);
+- nginx в prod монтирует `${CERTBOT_DATA_DIR}/www` (webroot) и
+  `${CERTBOT_DATA_DIR}/conf:ro`.
+
+### 6. Скрипт добавления администратора — accepted
+
+- `app/src/app/scripts/create_admin.py` (+ `scripts/__init__.py`), запуск
+  `python -m app.scripts.create_admin` из образа ubc-app
+  (docker compose run) либо локально из `app/` c `PYTHONPATH=src`;
+- argparse: `--username` (обяз.), `--password` (без флага — getpass),
+  `--role` (default `admin`, варианты admin/manager);
+- пароль — через `hash_password` и `validate_password_policy` из
+  `app.services.password` (8–72 байта);
+- идемпотентность: существующий username — обновление hash/role/is_active
+  с предупреждением, повторный запуск безопасен;
+- модель — `app.domain.models.user` (`User`, `UserRole`); подключение —
+  существующие `Settings`/`create_engine` (asyncpg), без DI.
+
+---
+
 ## Как использовать этот файл в новой сессии
 
 1. Откройте новый диалог.
@@ -1259,3 +1371,28 @@ conftest) отменены как избыточные. При повторно�
     `db-update-test`; образы пересобраны, контейнеры пересозданы,
     nginx перезапущен, health 200.
 
+- **Инфраструктура: nginx templates, SSL/Certbot, скрипт администратора** —
+  выполнено (24.09.2026). Подробности — в разделе «Инфраструктура» выше.
+  Кратко:
+  - nginx вынесен из `docker-compose.srv.yml` в
+    `docker-compose.nginx.{loc,prod}.yml`; `docker-compose.yml` включает
+    `docker-compose.nginx.${PROJECT_ENVIRONMENT:-loc}.yml` (без compose
+    profiles); `depends_on` nginx → frontend/backend/bot;
+  - конфигурация через templates (`envsubst`): `srv/nginx/templates/loc`
+    (http, без SSL) и `templates/prod` (80 — ACME + 301, 443 — TLS 1.2/1.3,
+    HSTS, http2); общие `srv/nginx/snippets/proxy_params.conf`,
+    `proxy_websocket_params.conf`; старый `srv/nginx/conf/default.conf` удалён;
+  - certbot (prod): `certbot/certbot:v2.11.0`, `renew` каждые 12 ч;
+    `.env` — `CERTBOT_DATA_DIR="${PROJECT_DATA_DIR}/certbot"` (каталоги
+    `conf/`, `www/` созданы), `CERTBOT_EMAIL=change_me`; первичный выпуск —
+    `init-letsencrypt.sh`; reload nginx каждые 6 ч —
+    `srv/nginx/docker-entrypoint.d/40-reload-certs.sh`;
+  - скрипт `app/src/app/scripts/create_admin.py` (`python -m
+    app.scripts.create_admin`): argparse, getpass с подтверждением,
+    идемпотентный upsert через `UserRepository`, exit 0/1/2;
+    unit `tests/unit/test_create_admin.py` — 13 passed (unit всего — 130);
+  - проверено: loc — стек поднят, nginx без `[emerg]`, health 200,
+    frontend 302; prod-nginx — на временном самоподписанном сертификате
+    (HTTP → 301, HTTPS `/api/v1/health` → 200, фоновый reload срабатывает);
+    `docker compose config` для loc и prod валиден; `create_admin` —
+    на тестовой БД (создание, обновление, невалидный пароль, ошибка БД).

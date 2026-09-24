@@ -7,26 +7,28 @@
 ## 1. Обзор
 
 Приложение управляет двухуровневым меню Telegram-бота: **категории → объекты**
-(объект: категория, наименование, краткое описание HTML/Markdown, PDF с полным
+(объект: категория, наименование, краткое описание HTML, PDF с полным
 описанием). Контент и пользователи управляются через веб-админку; посетители
 работают с ботом: регистрация (ФИО + согласие на обработку ПД), просмотр меню,
-получение PDF, создание и отмена заявок. Менеджеры обрабатывают заявки по своим
+получение PDF, создание и отмена заявок (форма строится динамически по
+настраиваемым полям категории). Менеджеры обрабатывают заявки по своим
 объектам в админке.
 
 ### Роли
 
 | Роль | Где | Права |
 |---|---|---|
-| **admin** | frontend | пользователи, настройки, контент (категории/объекты), просмотр всех заявок (без обработки), бан посетителей, сессии/устройства |
-| **manager** | frontend | свои объекты (связь объект↔менеджер) и объекты назначенных категорий (связь категория↔менеджер), обработка заявок по ним |
+| **admin** | frontend | пользователи, настройки, справочник полей заявки, контент (категории/объекты, CRUD), просмотр всех заявок (без обработки), бан посетителей, сессии/устройства |
+| **manager** | frontend | чтение своих категорий и объектов (прямая связь объект↔менеджер ∪ назначенные категории), обработка заявок по ним, дашборд |
 | **visitor** | bot | регистрация, меню, PDF, заявки |
 
 ### Стек
 
 - **services**: nginx, postgresql, pgbouncer, redis, rabbitmq (docker compose)
 - **backend**: Python 3.13, uv, FastAPI, dishka, SQLAlchemy async, asyncpg,
-  Alembic, faststream (RabbitMQ), structlog, PyJWT, bcrypt
-- **bot**: aiogram 3 (FSM в Redis), aiohttp-сессия (SOCKS-прокси опционально)
+  Alembic, faststream (RabbitMQ), structlog, PyJWT, bcrypt, nh3 (санитизация HTML)
+- **bot**: aiogram 3 (FSM в Redis), aiogram-dialog (динамическая форма заявки),
+  aiohttp-сессия (SOCKS-прокси опционально)
 - **frontend**: Nuxt 3 (SPA), TailwindCSS, thumbmarkjs
 - **контейнеры**: docker compose (`docker-compose.yml` включает
   `docker-compose.srv.yml` + `docker-compose.backend.yml` +
@@ -106,9 +108,9 @@ settings (key/value, отдельная таблица)
 | **request_fields** | id, request_id FK (CASCADE), field_id FK (**RESTRICT**), value_text (String(1024), nullable), unique(request_id, field_id) | значения динамических полей конкретной заявки; RESTRICT сохраняет историю заявок |
 | **devices** | id, user_id FK, device_id (thumbmarkjs), user_agent, last_seen_at | устройства входа |
 | **sessions** | id, device_id FK, user_id FK, refresh_token_jti, is_active, revoked_at | refresh-сессии (ротация, отзыв) |
-| **settings** | key (PK), value | page_size (10), cancel_interval_hours (24), welcome_text, consent_text |
+| **settings** | key (PK), value | page_size (10), cancel_interval_minutes (1440 = 24 ч), welcome_text, consent_text (тексты — HTML, санитизируются в боте) |
 
-Миграции: `app/alembic/versions/` (16 миграций, async-движок). Запуск — см. §7.
+Миграции: `app/alembic/versions/` (18 миграций, async-движок). Запуск — см. §7.
 
 ---
 
@@ -124,9 +126,9 @@ settings (key/value, отдельная таблица)
 | `POST /auth/login` | — | вход (rate-limit по IP), ставит cookies, создаёт сессию+device |
 | `POST /auth/refresh` | cookie | ротация refresh (старый jti деактивируется) |
 | `POST /auth/logout` | cookie | blacklist обоих токенов, деактивация сессии |
-| `GET/POST/PATCH/DELETE /categories[/{id}]` | admin | CRUD категорий (+sort_order, is_active) |
+| `GET/POST/PATCH/DELETE /categories[/{id}]` | admin (GET — также manager: только доступные) | CRUD категорий (+sort_order, is_active, button_text — текст кнопки «Создать заявку»; PATCH: null — не менять, "" — дефолт) |
 | `GET/PUT /categories/{id}/managers` | admin | менеджеры категории (доступ ко всем объектам категории) |
-| `GET/POST/PATCH/DELETE /objects[/{id}]` | admin | CRUD объектов |
+| `GET/POST/PATCH/DELETE /objects[/{id}]` | admin (GET — также manager: только доступные) | CRUD объектов |
 | `GET/PUT /objects/{id}/managers` | admin | список менеджеров объекта (только **прямые** связи) |
 | `PUT /objects/{id}/pdf` | admin | загрузка PDF (multipart, только application/pdf, ≤20 МБ) |
 | `GET /objects/{id}/pdf` | auth | отдача PDF (inline, открытие в новой вкладке) |
@@ -155,7 +157,9 @@ settings (key/value, отдельная таблица)
   согласие** (текст из settings); заблокированный → сообщение о блокировке;
   зарегистрированный → главное меню.
 - **Меню**: категории (пагинация page_size из settings) → объекты → карточка
-  объекта (описание, «Получить PDF» → документ Telegram, «Создать заявку»).
+  объекта (описание — HTML с санитизацией `nh3` по whitelist тегов Telegram,
+  «Получить PDF» → документ Telegram, «Создать заявку» — текст кнопки из
+  `categories.button_text`, дефолт «Создать заявку»).
 - **Заявка (динамический диалог aiogram-dialog)**: состав шагов задаёт админ
   для категории объекта (`request_category_fields`). Порядок: телефон (из
   профиля `visitors.phone` или новый — текст/контакт, `normalize_phone`) →
@@ -173,7 +177,8 @@ settings (key/value, отдельная таблица)
   менеджерам объекта. Пустая схема → сразу `summary`.
 - **Мои заявки**: список с пагинацией, статусы, значения динамических полей
   (`label: value`), отмена: `new` — всегда, `approved` — в пределах
-  `cancel_interval_hours` от `confirmed_at`.
+  `cancel_interval_minutes` от `confirmed_at` (момента подтверждения
+  менеджером; дефолт 1440 мин = 24 ч).
 - FSM хранится в Redis (`RedisStorage`, key builder с bot_id и destiny).
 
 ### Callback-схема
@@ -256,9 +261,29 @@ admin → PUT /objects/{id}/pdf (multipart) → PdfService: валидация (
 
 ```bash
 cp .env.example .env          # заполнить секреты
-docker compose up -d --build  # 8 контейнеров: nginx, frontend, backend, bot,
-                              # postgres, pgbouncer, redis, rabbitmq
+docker compose up -d --build  # loc: 8 контейнеров (nginx, frontend, backend, bot,
+                              # postgres, pgbouncer, redis, rabbitmq); prod: + certbot
 ```
+
+Nginx подключается по окружению: `docker-compose.yml` → `include`
+`docker-compose.nginx.${PROJECT_ENVIRONMENT:-loc}.yml` (без compose profiles):
+
+| | loc | prod |
+|---|---|---|
+| шаблоны (`envsubst`) | `srv/nginx/templates/loc/default.conf.template` — :80, все location | `templates/prod/default.conf.template` — :80, ACME + 301 на https; `ssl.conf.template` — :443, TLS 1.2/1.3, HSTS |
+| SSL | не используется | Let's Encrypt (webroot HTTP-01), `${CERTBOT_DATA_DIR}/{conf,www}` |
+| certbot | — | `certbot renew` каждые 12 ч |
+| reload nginx | — | каждые 6 ч (`srv/nginx/docker-entrypoint.d/40-reload-certs.sh`) |
+
+Общие фрагменты — `srv/nginx/snippets/` (`proxy_params.conf`,
+`proxy_websocket_params.conf`). Nginx `depends_on` frontend/backend/bot
+(upstream'ы резолвятся при старте). Первичный выпуск сертификата —
+`./init-letsencrypt.sh` (временный самоподписанный → nginx → `certbot certonly`
+→ reload; `--staging`, `--force`).
+
+Администратор: `docker compose run --rm backend python -m app.scripts.create_admin
+--username admin [--password ...] [--role admin|manager]` (идемпотентно;
+exit 0/1/2 — успех/неверный ввод/ошибка БД).
 
 Миграции (локально, из корня):
 

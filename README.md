@@ -43,8 +43,9 @@ app/                    backend + bot (один образ)
     db/                 движок и сессии
   alembic/              миграции
 frontend/               админка (Nuxt 3 + Tailwind)
-srv/nginx/              конфиги reverse proxy
-docker-compose*.yml     srv / backend / frontend / единый файл
+srv/nginx/              nginx.conf, templates/{loc,prod}, snippets, docker-entrypoint.d
+docker-compose*.yml     srv / backend / frontend / nginx.{loc,prod} / единый файл
+init-letsencrypt.sh     первичный выпуск сертификата Let's Encrypt (prod)
 docs/
   design-plan.md        план разработки и прогресс
   architecture.md       итоговая архитектура (ER, API, потоки данных)
@@ -57,11 +58,41 @@ cp .env.example .env    # заполнить секреты (пароли, BOT_T
 docker compose up -d --build
 ```
 
-Поднимаются 8 контейнеров: nginx, frontend, backend, bot, postgres, pgbouncer, redis, rabbitmq.
+Окружение задаёт `PROJECT_ENVIRONMENT` (`loc` | `prod`): `docker-compose.yml`
+подключает `docker-compose.nginx.${PROJECT_ENVIRONMENT}.yml`.
+
+- **loc** — 8 контейнеров: nginx (http :80, без SSL), frontend, backend, bot,
+  postgres, pgbouncer, redis, rabbitmq;
+- **prod** — 9 контейнеров: + certbot; nginx — :80 (ACME + редирект) и :443 (TLS).
 
 - Админка: `http://universal-bot-constructor.loc/` (домен из `PROJECT_DOMAIN`, см. `/etc/hosts`)
 - API: `http://…/api/v1/health`, Swagger: `http://…/api/docs`
-- Первый admin создаётся скриптом после применения миграций.
+
+### Администратор (после применения миграций)
+
+```bash
+# в docker (пароль запрашивается интерактивно)
+docker compose run --rm backend python -m app.scripts.create_admin --username admin
+
+# локально (из каталога app/)
+PYTHONPATH=src POSTGRES_HOST=127.0.0.1 ../.venv/bin/python -m app.scripts.create_admin \
+    --username admin [--password ...] [--role admin|manager]
+```
+
+Повторный запуск безопасен: существующий пользователь обновляется
+(пароль, роль, `is_active`). Коды выхода: 0 — успех, 1 — неверный ввод, 2 — ошибка БД.
+
+### SSL (prod)
+
+```bash
+# .env: PROJECT_ENVIRONMENT=prod, PROJECT_URL_SCHEME=https, PROJECT_DOMAIN, CERTBOT_EMAIL
+mkdir -p /data/universal-bot-constructor/certbot/{conf,www}   # ${CERTBOT_DATA_DIR}
+docker compose up -d --build postgres pgbouncer redis rabbitmq backend bot frontend
+./init-letsencrypt.sh            # --staging — тестовый CA, --force — перевыпуск
+```
+
+Продление автоматическое: certbot — `certbot renew` каждые 12 ч, nginx —
+`nginx -s reload` каждые 6 ч (`srv/nginx/docker-entrypoint.d/40-reload-certs.sh`).
 
 ### Миграции
 
@@ -95,7 +126,7 @@ cd frontend && npm install && npm run dev
 ## Конфигурация
 
 Все переменные — в `.env` (шаблон: `.env.example`), читаются pydantic-settings.
-Основные группы: `PROJECT_*`, `POSTGRES_*`, `REDIS_*`, `RABBITMQ_*`, `BACKEND_*`
+Основные группы: `PROJECT_*`, `CERTBOT_*` (prod), `POSTGRES_*`, `REDIS_*`, `RABBITMQ_*`, `BACKEND_*`
 (JWT-секрет, каталог PDF), `CONSUMER_*` (очереди и routing keys уведомлений),
 `BOT_*` (токен, прокси, webhook). Секреты в git не попадают.
 

@@ -1,0 +1,47 @@
+# Reverse proxy: frontend, backend API, webhook бота (loc, только http — без SSL/certbot)
+# Домен подставляется из .env (PROJECT_DOMAIN) при старте контейнера —
+# envsubst в entrypoint официального образа nginx
+# (/etc/nginx/templates/*.template -> /etc/nginx/conf.d/*.conf)
+
+upstream ubc_frontend {
+    server frontend:3000;
+}
+
+upstream ubc_backend {
+    server backend:8000;
+}
+
+upstream ubc_bot {
+    server bot:8080;
+}
+
+server {
+    listen 80;
+    server_name ${PROJECT_DOMAIN} localhost;
+
+    # Security-заголовки (все ответы)
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-XSS-Protection "0" always;
+
+
+    # Backend API
+    location /api/ {
+        proxy_pass http://ubc_backend;
+        include /etc/nginx/snippets/proxy_params.conf;
+    }
+
+    # Webhook бота (prod; в loc бот работает через long-polling)
+    location /bot/ {
+        proxy_pass http://ubc_bot;
+        include /etc/nginx/snippets/proxy_params.conf;
+    }
+
+    # Frontend (Nuxt, websocket)
+    location / {
+        proxy_pass http://ubc_frontend;
+        include /etc/nginx/snippets/proxy_params.conf;
+        include /etc/nginx/snippets/proxy_websocket_params.conf;
+    }
+}

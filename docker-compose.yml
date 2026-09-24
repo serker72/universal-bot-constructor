@@ -6,3 +6,6 @@ include:
   - docker-compose.srv.yml
   - docker-compose.backend.yml
   - docker-compose.frontend.yml
+  # nginx по окружению (.env): loc — http, prod — https + certbot
+  # (порядок старта задаёт depends_on nginx -> frontend/backend/bot)
+  - docker-compose.nginx.${PROJECT_ENVIRONMENT:-loc}.yml

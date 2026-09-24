@@ -1,0 +1,50 @@
+# HTTPS (prod): reverse proxy за TLS
+# Сертификат Let's Encrypt (certbot), домен из .env (PROJECT_DOMAIN)
+
+upstream ubc_frontend {
+    server frontend:3000;
+}
+
+upstream ubc_backend {
+    server backend:8000;
+}
+
+upstream ubc_bot {
+    server bot:8080;
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${PROJECT_DOMAIN};
+
+    ssl_certificate     /etc/letsencrypt/live/${PROJECT_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${PROJECT_DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    # Security-заголовки (все ответы)
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header X-XSS-Protection "0" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    # Backend API
+    location /api/ {
+        proxy_pass http://ubc_backend;
+        include /etc/nginx/snippets/proxy_params.conf;
+    }
+
+    # Webhook бота
+    location /bot/ {
+        proxy_pass http://ubc_bot;
+        include /etc/nginx/snippets/proxy_params.conf;
+    }
+
+    # Frontend (Nuxt, websocket)
+    location / {
+        proxy_pass http://ubc_frontend;
+        include /etc/nginx/snippets/proxy_params.conf;
+        include /etc/nginx/snippets/proxy_websocket_params.conf;
+    }
+}

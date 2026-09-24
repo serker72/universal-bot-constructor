@@ -1,0 +1,18 @@
+# HTTP (prod): ACME challenge + редирект на HTTPS
+# Домен из .env (PROJECT_DOMAIN), envsubst при старте контейнера
+
+server {
+    listen 80;
+    server_name ${PROJECT_DOMAIN};
+
+    # Let's Encrypt HTTP-01 challenge (webroot certbot)
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        default_type "text/plain";
+    }
+
+    # Остальное — на HTTPS
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}

@@ -1,16 +1,26 @@
 # HTTPS (prod): reverse proxy за TLS
 # Сертификат Let's Encrypt (certbot), домен из .env (PROJECT_DOMAIN)
 
+# Динамический резолв upstream'ов (nginx >= 1.27.3: server ... resolve):
+# после пересоздания контейнеров IP подхватываются без nginx -s reload,
+# nginx стартует даже если контейнер ещё не поднят.
+# 127.0.0.11 — встроенный DNS docker; valid — период перерезолва.
+# (resolver — в http-контексте, один раз: в prod/default.conf его нет)
+resolver 127.0.0.11 valid=10s ipv6=off;
+
 upstream ubc_frontend {
-    server frontend:3000;
+    zone ubc_frontend 64k;   # общая память — обязательна для resolve
+    server frontend:3000 resolve;
 }
 
 upstream ubc_backend {
-    server backend:8000;
+    zone ubc_backend 64k;
+    server backend:8000 resolve;
 }
 
 upstream ubc_bot {
-    server bot:8080;
+    zone ubc_bot 64k;
+    server bot:8080 resolve;
 }
 
 server {

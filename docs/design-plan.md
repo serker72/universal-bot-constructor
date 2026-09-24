@@ -1021,7 +1021,14 @@ nginx не читает переменные окружения напрямую
   `PROJECT_ENVIRONMENT=prod` и `CERTBOT_EMAIL != change_me` → временный
   самоподписанный сертификат (nginx стартует) → удаление → `certbot certonly
   --webroot` → `nginx -s reload` → `up -d certbot`; флаги `--staging`,
-  `--force`; повторный запуск при наличии `renewal/<domain>.conf` — no-op;
+  `--force`;
+- переход staging → боевой (вариант 1, автоматический): состояние
+  определяется по `server` в `renewal/<domain>.conf` (`none` | `staging` —
+  `acme-staging` | `prod`): режим совпадает — no-op (`--force` —
+  `--force-renewal`); staging при запросе боевого — `certbot delete
+  --cert-name <domain>` + выпуск боевого; боевой при запросе staging —
+  отказ (замена только с `--force`); типовой порядок: `--staging`, затем
+  без флагов;
 - подхват продлённого сертификата — `srv/nginx/docker-entrypoint.d/40-reload-certs.sh`
   (монтируется в `/docker-entrypoint.d/` только в prod): фоновый цикл
   `nginx -s reload` каждые `NGINX_RELOAD_INTERVAL` (дефолт 6h).

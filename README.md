@@ -88,7 +88,9 @@ PYTHONPATH=src POSTGRES_HOST=127.0.0.1 ../.venv/bin/python -m app.scripts.create
 # .env: PROJECT_ENVIRONMENT=prod, PROJECT_URL_SCHEME=https, PROJECT_DOMAIN, CERTBOT_EMAIL
 mkdir -p /data/universal-bot-constructor/certbot/{conf,www}   # ${CERTBOT_DATA_DIR}
 docker compose up -d --build postgres pgbouncer redis rabbitmq backend bot frontend
-./init-letsencrypt.sh            # --staging — тестовый CA, --force — перевыпуск
+./init-letsencrypt.sh --staging  # 1) проверка на тестовом CA (без лимитов)
+./init-letsencrypt.sh            # 2) боевой сертификат (staging заменяется автоматически)
+# --force — принудительный перевыпуск
 ```
 
 Продление автоматическое: certbot — `certbot renew` каждые 12 ч, nginx —

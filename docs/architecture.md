@@ -279,7 +279,8 @@ Nginx подключается по окружению: `docker-compose.yml` →
 `proxy_websocket_params.conf`). Nginx `depends_on` frontend/backend/bot
 (upstream'ы резолвятся при старте). Первичный выпуск сертификата —
 `./init-letsencrypt.sh` (временный самоподписанный → nginx → `certbot certonly`
-→ reload; `--staging`, `--force`).
+→ reload; `--staging`, `--force`; staging-сертификат при запуске без
+`--staging` заменяется боевым автоматически — `certbot delete` + выпуск).
 
 Администратор: `docker compose run --rm backend python -m app.scripts.create_admin
 --username admin [--password ...] [--role admin|manager]` (идемпотентно;

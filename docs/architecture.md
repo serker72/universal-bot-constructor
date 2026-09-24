@@ -276,8 +276,12 @@ Nginx подключается по окружению: `docker-compose.yml` →
 | reload nginx | — | каждые 6 ч (`srv/nginx/docker-entrypoint.d/40-reload-certs.sh`) |
 
 Общие фрагменты — `srv/nginx/snippets/` (`proxy_params.conf`,
-`proxy_websocket_params.conf`). Nginx `depends_on` frontend/backend/bot
-(upstream'ы резолвятся при старте). Первичный выпуск сертификата —
+`proxy_websocket_params.conf`). Upstream'ы — `server ... resolve` + `zone`
+(nginx ≥ 1.27.3) и `resolver 127.0.0.11 valid=10s` (DNS docker): IP
+пересозданных контейнеров подхватываются без reload (~10 с), nginx
+стартует без приложений (до их появления — 502, имя перезапрашивается
+примерно раз в 30 с); `depends_on` frontend/backend/bot задаёт порядок
+старта. Первичный выпуск сертификата —
 `./init-letsencrypt.sh` (временный самоподписанный → nginx → `certbot certonly`
 → reload; `--staging`, `--force`; staging-сертификат при запуске без
 `--staging` заменяется боевым автоматически — `certbot delete` + выпуск).
@@ -317,8 +321,9 @@ structlog: console (dev) / JSON (prod), уровень — по `PROJECT_ENVIRON
 
 ### Известные особенности
 
-- nginx кеширует IP контейнеров: после пересоздания backend/bot нужен
-  `docker exec ubc-nginx nginx -s reload`;
+- nginx больше не кеширует IP контейнеров навсегда (`server ... resolve`,
+  24.09.2026): после пересоздания backend/bot/frontend возможны 502 в течение
+  ~10 с (`valid` резолвера), ручной `nginx -s reload` не нужен;
 - PDF открывается в новой вкладке с cookies — работает только на том же домене,
   что и админка (иначе httpOnly cookies не отправятся);
 - `crypto.subtle` (thumbmarkjs) недоступен вне secure context — есть фолбэк

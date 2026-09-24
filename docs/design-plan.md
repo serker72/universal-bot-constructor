@@ -1421,3 +1421,14 @@ nginx не читает переменные окружения напрямую
   - прогон в `ubc-test-runner` (образы `ubc-app`, `ubc-app-test` пересобраны,
     тестовая БД мигрирована до head `4093e5d13bac`): полный
     `pytest tests/unit tests/integration` — **289 passed** за 3 мин 24 с.
+- **nginx: динамический резолв upstream'ов (24.09.2026)** — выполнено
+  (вариант A): в `templates/loc/default.conf.template` и
+  `templates/prod/ssl.conf.template` — `resolver 127.0.0.11 valid=10s
+  ipv6=off`, в каждом `upstream` — `zone <name> 64k` + `server <host>:<port>
+  resolve` (nginx ≥ 1.27.3, образ 1.27.5); `proxy_pass`/`location` без
+  изменений. Устранена особенность «после пересоздания backend/bot нужен
+  `nginx -s reload`» (проявлялась 502 после пересборки образов). Проверено:
+  `nginx -t`; смена IP backend (172.18.0.2 → 172.18.0.10) без reload —
+  health 200 через ~10 с; prod-шаблон стартует без приложений в сети (502),
+  после их появления начинает проксировать (~30 с — повтор резолва после
+  NXDOMAIN).

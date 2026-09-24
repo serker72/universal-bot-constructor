@@ -202,7 +202,7 @@
 - [x] п.20 — Composable `useManagers` (однократная загрузка списка менеджеров, переиспользуется между страницами) — `frontend/composables/useManagers.ts`; pages/categories.vue, objects.vue используют его
 - [x] п.11 (frontend-часть) — `fetchMe()` (GET /auth/me) в `useAuth`; middleware сверяет роль с сервером при каждой навигации — `frontend/composables/useAuth.ts`, `middleware/auth.global.ts`
 - [x] п.38 — Все bare-catch заменены на `catch (err)` + `console.warn` с контекстом — все 9 страниц frontend (сборка `nuxt build` прошла успешно)
-- [x] п.36 — Security-заголовки nginx: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `X-XSS-Protection` (always) — `srv/nginx/conf/default.conf`; HTTPS (443) — осознанно отложено (закомментировано в compose, certbot позже)
+- [x] п.36 — Security-заголовки nginx: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `X-XSS-Protection` (always) — сейчас в `srv/nginx/templates/{loc,prod}/*.template`; HTTPS (443) — реализовано 24.09.2026 для prod (`ssl.conf.template`, HSTS, certbot — `docker-compose.nginx.prod.yml`, `init-letsencrypt.sh`)
 - [x] п.37 — Осознанно оставлено: порт backend на 127.0.0.1 (удобно для локальной отладки); при prod-деплое можно закрыть
 
 ---

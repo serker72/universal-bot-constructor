@@ -35,8 +35,9 @@
 ## Запуск
 
 - Docker compose, все переменные в `.env`.
-- dev — long-polling, prod — webhook через nginx.
-- HTTPS/certbot — позже.
+- loc — long-polling, prod — webhook через nginx.
+- HTTPS/certbot — только prod (см. раздел «Инфраструктура: nginx templates,
+  SSL/Certbot»).
 
 ---
 

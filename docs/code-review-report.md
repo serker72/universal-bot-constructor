@@ -166,13 +166,13 @@
 ## 📝 Статус исправлений (в процессе работы)
 
 - [x] п.1 — Валидация `BACKEND_JWT_SECRET` (fail-fast, ≥32 байт в prod) + `cookie_secure` из `url_scheme` — `app/src/app/config/settings.py`
-- [x] п.2 — `srv/pgbouncer/userlist.txt` убран из git (`.gitignore`, `git rm --cached`), перегенерирован через `gen_userlist.sh`
+- [x] п.2 — (исправлено 24.09.2026 при повторном ревью; ранее отметка была ошибочной — файл оставался в индексе git и в origin/master) `srv/pgbouncer/userlist.txt` удалён из индекса (`git rm --cached`), `gen_userlist.sh` создаёт файл с правами 600. **Требуется вручную:** сменить пароли PostgreSQL (скомпрометированы в истории git) и при необходимости вычистить историю (`git filter-repo --path srv/pgbouncer/userlist.txt --invert-paths`)
 - [x] п.5 — pgbouncer `auth_type = scram-sha-256` — `srv/pgbouncer/pgbouncer.ini`
-- [x] п.3 — uvicorn `--proxy-headers --forwarded-allow-ips='*'` — `docker-compose.backend.yml`; `_client_ip()` из `X-Forwarded-For` + составной ключ `login:{ip}:{username}` — `app/src/app/api/routers/auth.py`
+- [x] п.3 — (доработано 24.09.2026: прежний вариант обходился подменой `X-Forwarded-For` — брался первый адрес, заданный клиентом) nginx перезаписывает `X-Forwarded-For` адресом клиента (`srv/nginx/snippets/proxy_params.conf`), `_client_ip()` берёт последний адрес; дополнительно лимит по username и `limit_req` на `/auth/login` в nginx
 - [x] п.4 — Атомарный rate-limit через Lua (INCR+EXPIRE) + `add_many` через pipeline — `app/src/app/services/security.py`, тесты обновлены (`app/tests/unit/test_security.py`)
 - [x] п.6 — HTML-экранирование `obj.name`/`short_description` (`aiogram.html.quote`) — `app/src/app/bot/handlers/menu.py`
 - [x] п.7 — bcrypt: ограничение 72 байта + `validate_password_policy` — `app/src/app/services/password.py`, `app/src/app/api/schemas/user.py` (max_length 128→72)
-- [x] п.8 — Политика паролей: проверка 8–72 байта в `hash_password` — `app/src/app/services/password.py`
+- [x] п.8 — (доработано 24.09.2026: ранее проверялась только длина 8–72) Политика паролей: не короче 10 символов, ≤ 72 байт, запрет распространённых паролей — `app/src/app/services/password.py`
 - [x] п.9 — Swagger/OpenAPI отключаются в prod — `app/src/app/api/main.py`
 - [x] п.10 — Убран `drop_pending_updates` из `set_webhook` — `app/src/app/bot/main.py`
 - [x] п.11 — Добавлен эндпоинт `GET /auth/me` — `app/src/app/api/routers/auth.py` (frontend-интеграция — в работе)
@@ -189,7 +189,7 @@
 - [x] п.23 — `TokenBlacklist.add_many` через redis-pipeline; `revoke_all_for_user` пишет одним round-trip — `app/src/app/services/security.py`, `auth.py`
 - [x] п.24 — Параллельная рассылка `_send_all` (`asyncio.gather` + Semaphore(10)) — `app/src/app/bot/notifications.py`
 - [x] п.25 — Размер PDF проверяется до чтения (`file.size` + повторная проверка после read) — `app/src/app/api/routers/pdf.py`
-- [x] п.26 — `CalendarConfig` вычисляется в геттере окна на каждый рендер (`_calendar_getter`), не при импорте — `app/src/app/bot/dialogs/request_dialog.py`
+- [x] п.26 — (исправлено 24.09.2026; прежнее исправление не работало — aiogram-dialog не читает ключ `calendar_config` из геттера) границы календаря вычисляются на каждый рендер в `RuCalendar._get_user_config` (сегодня по МСК … +2 года, 29.02 → 28.02) — `app/src/app/bot/widgets/ru_calendar.py`
 - [x] п.27 — Убран бесполезный `or_()` — `app/src/app/repository/visitor.py`
 - [x] п.28 — Осознанно оставлено: find + count (2 запроса на страницу) — приемлемо при текущих объёмах; при росте → `count(*) over ()`
 - [x] п.29 — `IntegrityError` обрабатывается в `create_user` (гонка username/telegram_id → 400, rollback) — `app/src/app/api/routers/users.py`
@@ -201,8 +201,8 @@
 - [x] п.35 — `SQLALCHEMY_DEBUG=False` в `.env.example` (+ предупреждение в комментарии)
 - [x] п.20 — Composable `useManagers` (однократная загрузка списка менеджеров, переиспользуется между страницами) — `frontend/composables/useManagers.ts`; pages/categories.vue, objects.vue используют его
 - [x] п.11 (frontend-часть) — `fetchMe()` (GET /auth/me) в `useAuth`; middleware сверяет роль с сервером при каждой навигации — `frontend/composables/useAuth.ts`, `middleware/auth.global.ts`
-- [x] п.38 — Все bare-catch заменены на `catch (err)` + `console.warn` с контекстом — все 9 страниц frontend (сборка `nuxt build` прошла успешно)
-- [x] п.36 — Security-заголовки nginx: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `X-XSS-Protection` (always) — сейчас в `srv/nginx/templates/{loc,prod}/*.template`; HTTPS (443) — реализовано 24.09.2026 для prod (`ssl.conf.template`, HSTS, certbot — `docker-compose.nginx.prod.yml`, `init-letsencrypt.sh`)
+- [x] п.38 — (доработано 24.09.2026: ранее ошибки только логировались, `detail` ответа не показывался) ошибки API выводятся пользователю с `detail` backend (`apiErrorMessage`, `showLoadError` в `frontend/composables/useApi.ts`), загрузка списков без unhandled rejection
+- [x] п.36 — Security-заголовки nginx: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `X-XSS-Protection` (always), CSP (prod), `server_tokens off`, `default_server` для неизвестного Host, `limit_req` для логина — `srv/nginx/nginx.conf`, `srv/nginx/templates/{loc,prod}/*.template` (файл `srv/nginx/conf/default.conf` удалён); HTTPS (443) — реализовано 24.09.2026 для prod (`ssl.conf.template`, HSTS, certbot — `docker-compose.nginx.prod.yml`, `init-letsencrypt.sh`)
 - [x] п.37 — Осознанно оставлено: порт backend на 127.0.0.1 (удобно для локальной отладки); при prod-деплое можно закрыть
 
 ---

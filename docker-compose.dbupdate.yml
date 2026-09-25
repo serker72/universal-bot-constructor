@@ -9,7 +9,11 @@ services:
   db-update:
     image: ubc-app:latest
     container_name: ubc-db-update
-    command: alembic upgrade head
+    command: ["alembic", "upgrade", "head"]
+    # миграции — только после готовности БД (иначе connection refused)
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
     env_file:
       - .env
     environment:

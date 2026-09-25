@@ -6,11 +6,12 @@ name: universal-bot-constructor
 services:
   # --- PostgreSQL ---
   postgres:
-    image: postgres:16-alpine
+    # закреплённые теги: плавающие (16-alpine, 7-alpine) дают разные версии на хостах
+    image: postgres:16.14-alpine
     container_name: ubc-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       POSTGRES_MULTIPLE_DATABASES: ${POSTGRES_DB}::${POSTGRES_USER}::${POSTGRES_PASSWORD}|${POSTGRES_TEST_DB}::${POSTGRES_TEST_USER}::${POSTGRES_TEST_PASSWORD}
     volumes:
       - ${POSTGRES_DATA_DIR}:/var/lib/postgresql/data
@@ -31,6 +32,17 @@ services:
     image: edoburu/pgbouncer:v1.24.1-p1
     container_name: ubc-pgbouncer
     restart: unless-stopped
+    # listen_port берётся из POSTGRES_PORT (.env), а не хардкода pgbouncer.ini:
+    # иначе при смене переменной проброс порта и подключение приложений ломаются
+    environment:
+      POSTGRES_PORT: ${POSTGRES_PORT}
+    command:
+      - sh
+      - -c
+      - >-
+        sed "s/^listen_port = .*/listen_port = $$POSTGRES_PORT/"
+        /etc/pgbouncer/pgbouncer.ini > /tmp/pgbouncer.ini
+        && exec /usr/bin/pgbouncer /tmp/pgbouncer.ini
     volumes:
       - ./srv/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
       - ./srv/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
@@ -50,21 +62,25 @@ services:
 
   # --- Redis ---
   redis:
-    image: redis:7-alpine
+    image: redis:7.0.4-alpine
     container_name: ubc-redis
     restart: unless-stopped
-    command: >
-      redis-server
-      --appendonly yes
-      --requirepass ${REDIS_PASSWORD}
+    # пароль — из окружения, а не в argv (не виден в ps / docker inspect Cmd),
+    # см. srv/redis/entrypoint.sh; fail-fast при пустом пароле
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      REDIS_PORT: ${REDIS_PORT}
+    command: ["sh", "/usr/local/bin/ubc-redis-entrypoint.sh"]
     volumes:
+      - ./srv/redis/entrypoint.sh:/usr/local/bin/ubc-redis-entrypoint.sh:ro
       - ${REDIS_DATA_DIR}:/data
     networks:
       - backend
     ports:
       - "127.0.0.1:${REDIS_PORT}:${REDIS_PORT}"
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} ping | grep PONG"]
+      # REDISCLI_AUTH — пароль redis-cli из окружения (без -a в argv)
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli -p \"$$REDIS_PORT\" ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -72,13 +88,19 @@ services:
 
   # --- RabbitMQ ---
   rabbitmq:
-    image: rabbitmq:3-management-alpine
+    image: rabbitmq:3.13.3-management-alpine
     container_name: ubc-rabbitmq
+    # фиксированное имя узла (rabbit@rabbitmq): иначе при каждом пересоздании
+    # контейнера создаётся новая база mnesia — пользователи и очереди теряются
+    hostname: rabbitmq
     restart: unless-stopped
     environment:
-      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+      # fail-fast: без явных учётных данных контейнер не стартует (не guest/guest)
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:?RABBITMQ_USERNAME is required}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD is required}
       RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST}
+      # порты — из .env (проброс ниже использует те же переменные)
+      RABBITMQ_NODE_PORT: ${RABBITMQ_PORT}
     volumes:
       - ${RABBITMQ_DATA_DIR}:/var/lib/rabbitmq
     networks:

@@ -11,9 +11,9 @@ services:
     image: ubc-frontend:latest
     container_name: ubc-frontend
     restart: unless-stopped
-    command: node .output/server/index.mjs
-    env_file:
-      - .env
+    command: ["node", ".output/server/index.mjs"]
+    # env_file не подключаем: SPA нужен только NUXT_PUBLIC_BACKEND_URL,
+    # секреты (JWT, BOT_TOKEN, пароли) в контейнер frontend не передаются
     environment:
       PROJECT_ENVIRONMENT: ${PROJECT_ENVIRONMENT}
       NUXT_PUBLIC_BACKEND_URL: ${BACKEND_BASE_URL}${BACKEND_API_PREFIX}
@@ -21,6 +21,12 @@ services:
       - frontend
     ports:
       - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
 networks:
   # Не external: при отдельном запуске (без srv.yml) compose создаст сеть

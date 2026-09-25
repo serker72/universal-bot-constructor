@@ -1,5 +1,7 @@
 # HTTPS (prod): reverse proxy за TLS
 # Сертификат Let's Encrypt (certbot), домен из .env (PROJECT_DOMAIN)
+# Порты upstream'ов и лимит тела запроса — из .env (envsubst, см.
+# docker-compose.nginx.prod.yml), а не хардкод.
 
 # Динамический резолв upstream'ов (nginx >= 1.27.3: server ... resolve):
 # после пересоздания контейнеров IP подхватываются без nginx -s reload,
@@ -11,16 +13,27 @@ resolver 127.0.0.11 valid=10s ipv6=off;
 upstream ubc_frontend {
     zone ubc_frontend 64k;   # общая память — обязательна для resolve
     server frontend:3000 resolve;
+    keepalive 16;
 }
 
 upstream ubc_backend {
     zone ubc_backend 64k;
-    server backend:8000 resolve;
+    server backend:${BACKEND_PORT} resolve;
+    keepalive 16;
 }
 
 upstream ubc_bot {
     zone ubc_bot 64k;
-    server bot:8080 resolve;
+    server bot:${BOT_WEBHOOK_PORT} resolve;
+    keepalive 4;
+}
+
+# Неизвестный Host / SNI — отклонить TLS-рукопожатие (без сертификата)
+server {
+    listen 443 ssl default_server;
+    http2 on;
+    server_name _;
+    ssl_reject_handshake on;
 }
 
 server {
@@ -32,13 +45,26 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/${PROJECT_DOMAIN}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
 
+    # загрузка PDF (BACKEND_MAX_PDF_SIZE_MB) с запасом на multipart
+    client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};
+
     # Security-заголовки (все ответы)
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "DENY" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header X-XSS-Protection "0" always;
+    # CSP: SPA и API на одном origin; inline-скрипт конфигурации Nuxt
+    # и inline-стили Vue требуют 'unsafe-inline'
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
     # HSTS: 24 ч на период ввода prod; после стабилизации — 31536000 (1 год)
     add_header Strict-Transport-Security "max-age=86400" always;
+
+    # Вход в админку: limit_req (зона ubc_login в nginx.conf)
+    location = ${BACKEND_API_PREFIX}/auth/login {
+        limit_req zone=ubc_login burst=5 nodelay;
+        proxy_pass http://ubc_backend;
+        include /etc/nginx/snippets/proxy_params.conf;
+    }
 
     # Backend API
     location /api/ {

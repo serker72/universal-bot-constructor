@@ -10,28 +10,50 @@
 #      - "5432:5432"
 #    volumes:
 #      - ./create-multiple-postgresql-databases.sh:/docker-entrypoint-initdb.d/create-multiple-postgresql-databases.sh
+#
+# Пользователи приложения создаются БЕЗ SUPERUSER (владелец своей БД):
+# утечка пароля / SQL-инъекция не дают COPY ... PROGRAM и доступа к чужим БД.
+# Имена и пароль экранируются psql (:"var" — идентификатор, %L — литерал).
+#
+# Скрипт идемпотентен: для уже существующего кластера (init-скрипты больше
+# не выполняются) его можно запустить повторно — роли будут понижены
+# до NOSUPERUSER, недостающие БД созданы:
+#   docker exec ubc-postgres bash /docker-entrypoint-initdb.d/create-multiple-postgresql-databases.sh
 ###############################################################################
 set -e
 set -u
 
 function create_user_and_database() {
-	local database=$(echo $1 | tr '::' ' ' | awk  '{print $1}')
-	local owner=$(echo $1 | tr '::' ' ' | awk  '{print $2}')
-	local pass=$(echo $1 | tr '::' ' ' | awk  '{print $3}')
+	local spec="$1"
+	local database="${spec%%::*}"
+	local rest="${spec#*::}"
+	local owner="${rest%%::*}"
+	local pass="${rest#*::}"
 	echo "  Creating user '$owner' and database '$database'"
-	psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
-	    CREATE USER $owner WITH SUPERUSER PASSWORD '$pass';
-	    CREATE DATABASE $database;
-      GRANT ALL ON DATABASE $database TO $owner;
-      ALTER DATABASE $database OWNER TO $owner;
-      GRANT ALL ON SCHEMA PUBLIC TO $owner;
-EOSQL
+	# пароль передаётся через окружение (\getenv), а не argv psql
+	UBC_DB_PASS="$pass" psql -v ON_ERROR_STOP=1 --username "${POSTGRES_USER:-postgres}" \
+		-v database="$database" -v owner="$owner" <<-'EOSQL'
+		\getenv pass UBC_DB_PASS
+		SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'owner', :'pass')
+		WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'owner') \gexec
+		SELECT format(
+		    'ALTER ROLE %I WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L',
+		    :'owner', :'pass'
+		) \gexec
+		SELECT format('CREATE DATABASE %I OWNER %I', :'database', :'owner')
+		WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'database') \gexec
+		ALTER DATABASE :"database" OWNER TO :"owner";
+		GRANT ALL ON DATABASE :"database" TO :"owner";
+		\connect :"database"
+		GRANT ALL ON SCHEMA public TO :"owner";
+	EOSQL
 }
 
-if [ -n "$POSTGRES_MULTIPLE_DATABASES" ]; then
-	echo "Multiple database creation requested: $POSTGRES_MULTIPLE_DATABASES"
-	for db in $(echo $POSTGRES_MULTIPLE_DATABASES | tr '|' ' '); do
-		create_user_and_database $db
+if [ -n "${POSTGRES_MULTIPLE_DATABASES:-}" ]; then
+	echo "Multiple database creation requested"
+	IFS='|' read -r -a specs <<< "$POSTGRES_MULTIPLE_DATABASES"
+	for db in "${specs[@]}"; do
+		create_user_and_database "$db"
 	done
 	echo "Multiple databases created"
 fi

@@ -1,0 +1,12 @@
+# Контекст сборки образов app (app/Dockerfile, app/Dockerfile.test) — корень
+# проекта (uv.lock workspace). В контекст попадают только манифесты и app/.
+*
+!pyproject.toml
+!uv.lock
+!app/pyproject.toml
+!app/alembic.ini
+!app/alembic/
+!app/src/
+!app/tests/
+**/__pycache__
+**/*.py[oc]

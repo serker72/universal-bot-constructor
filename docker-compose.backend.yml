@@ -2,20 +2,26 @@
 # Использование: docker compose -f docker-compose.backend.yml up -d
 name: universal-bot-constructor
 
+# Ожидание готовности инфраструктуры (depends_on: service_healthy на
+# pgbouncer/redis/rabbitmq) задаётся в docker-compose.yml, где все сервисы
+# в одном проекте; этот файл остаётся самостоятельно запускаемым.
+
 services:
   # --- Backend (FastAPI + uvicorn) ---
   backend:
     build:
-      context: ./app
-      dockerfile: Dockerfile
+      # контекст — корень: uv.lock workspace лежит в корне (см. .dockerignore)
+      context: .
+      dockerfile: app/Dockerfile
     image: ubc-app:latest
     container_name: ubc-backend
     restart: unless-stopped
     # --proxy-headers: uvicorn берёт реальный IP клиента из X-Forwarded-For
-    # (проставляет nginx) — нужен для rate-limit логина; порт published только
-    # на 127.0.0.1, поэтому доверяем всем источникам заголовка внутри хоста
+    # (nginx перезаписывает заголовок адресом клиента) — нужен для rate-limit
+    # логина; порт published только на 127.0.0.1.
+    # exec: uvicorn — PID 1, получает SIGTERM (graceful shutdown)
     command: >
-      sh -c "uvicorn src.app.api.main:app --host 0.0.0.0 --port ${BACKEND_PORT} --proxy-headers --forwarded-allow-ips='*' ${BACKEND_CONTAINER_COMMAND}"
+      sh -c "exec uvicorn src.app.api.main:app --host 0.0.0.0 --port ${BACKEND_PORT} --proxy-headers --forwarded-allow-ips='*' ${BACKEND_CONTAINER_COMMAND}"
     env_file:
       - .env
     environment:
@@ -26,13 +32,24 @@ services:
       - backend
     ports:
       - "127.0.0.1:${BACKEND_PORT}:${BACKEND_PORT}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import os, urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:' + os.environ['BACKEND_PORT']
+          + os.environ.get('BACKEND_API_PREFIX', '/api/v1') + '/health/ready', timeout=4)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   # --- Bot (aiogram) ---
   bot:
     image: ubc-app:latest
     container_name: ubc-bot
     restart: unless-stopped
-    command: python -m src.app.bot.main
+    command: ["python", "-m", "src.app.bot.main"]
     env_file:
       - .env
     environment:

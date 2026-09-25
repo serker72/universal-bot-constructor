@@ -9,3 +9,20 @@ include:
   # nginx по окружению (.env): loc — http, prod — https + certbot
   # (порядок старта задаёт depends_on nginx -> frontend/backend/bot)
   - docker-compose.nginx.${PROJECT_ENVIRONMENT:-loc}.yml
+
+# Порядок холодного старта: приложения — только после готовности инфраструктуры
+# (без этого backend/bot падают до готовности RabbitMQ/Postgres и поднимаются
+# restart-циклом)
+x-infra-depends: &infra-depends
+  pgbouncer:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  rabbitmq:
+    condition: service_healthy
+
+services:
+  backend:
+    depends_on: *infra-depends
+  bot:
+    depends_on: *infra-depends

@@ -2,6 +2,7 @@
 # Домен подставляется из .env (PROJECT_DOMAIN) при старте контейнера —
 # envsubst в entrypoint официального образа nginx
 # (/etc/nginx/templates/*.template -> /etc/nginx/conf.d/*.conf)
+# Порты upstream'ов и лимит тела запроса — из .env (docker-compose.nginx.loc.yml).
 
 # Динамический резолв upstream'ов (nginx >= 1.27.3: server ... resolve):
 # после пересоздания контейнеров IP подхватываются без nginx -s reload,
@@ -12,21 +13,27 @@ resolver 127.0.0.11 valid=10s ipv6=off;
 upstream ubc_frontend {
     zone ubc_frontend 64k;   # общая память — обязательна для resolve
     server frontend:3000 resolve;
+    keepalive 16;
 }
 
 upstream ubc_backend {
     zone ubc_backend 64k;
-    server backend:8000 resolve;
+    server backend:${BACKEND_PORT} resolve;
+    keepalive 16;
 }
 
 upstream ubc_bot {
     zone ubc_bot 64k;
-    server bot:8080 resolve;
+    server bot:${BOT_WEBHOOK_PORT} resolve;
+    keepalive 4;
 }
 
 server {
     listen 80;
     server_name ${PROJECT_DOMAIN} localhost;
+
+    # загрузка PDF (BACKEND_MAX_PDF_SIZE_MB) с запасом на multipart
+    client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};
 
     # Security-заголовки (все ответы)
     add_header X-Content-Type-Options "nosniff" always;
@@ -34,6 +41,12 @@ server {
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header X-XSS-Protection "0" always;
 
+    # Вход в админку: limit_req (зона ubc_login в nginx.conf)
+    location = ${BACKEND_API_PREFIX}/auth/login {
+        limit_req zone=ubc_login burst=5 nodelay;
+        proxy_pass http://ubc_backend;
+        include /etc/nginx/snippets/proxy_params.conf;
+    }
 
     # Backend API
     location /api/ {

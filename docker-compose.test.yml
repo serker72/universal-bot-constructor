@@ -17,7 +17,7 @@ services:
   db-update-test:
     image: ubc-app:latest
     container_name: ubc-db-update-test
-    command: alembic upgrade head
+    command: ["alembic", "upgrade", "head"]
     env_file:
       - .env.test
     environment:
@@ -31,8 +31,9 @@ services:
     image: ubc-app:latest
     container_name: ubc-backend-test
     restart: unless-stopped
+    # exec: uvicorn — PID 1, получает SIGTERM (graceful shutdown)
     command: >
-      sh -c "uvicorn src.app.api.main:app --host 0.0.0.0 --port ${BACKEND_PORT} ${BACKEND_CONTAINER_COMMAND}"
+      sh -c "exec uvicorn src.app.api.main:app --host 0.0.0.0 --port ${BACKEND_PORT} ${BACKEND_CONTAINER_COMMAND}"
     env_file:
       - .env.test
     environment:
@@ -49,7 +50,7 @@ services:
     image: ubc-app:latest
     container_name: ubc-bot-test
     restart: unless-stopped
-    command: python -m src.app.bot.main
+    command: ["python", "-m", "src.app.bot.main"]
     env_file:
       - .env.test
     environment:
@@ -65,9 +66,8 @@ services:
     image: ubc-frontend:latest
     container_name: ubc-frontend-test
     restart: unless-stopped
-    command: node .output/server/index.mjs
-    env_file:
-      - .env.test
+    command: ["node", ".output/server/index.mjs"]
+    # env_file не подключаем: секреты в контейнер frontend не передаются
     environment:
       PROJECT_ENVIRONMENT: ${PROJECT_ENVIRONMENT}
       NUXT_PUBLIC_BACKEND_URL: ${BACKEND_BASE_URL}${BACKEND_API_PREFIX}
@@ -81,8 +81,9 @@ services:
   # Отдельный тестовый образ: prod-зависимости + dev-зависимости + tests
   test-runner:
     build:
-      context: ./app
-      dockerfile: Dockerfile.test
+      # контекст — корень: uv.lock workspace лежит в корне (см. .dockerignore)
+      context: .
+      dockerfile: app/Dockerfile.test
     image: ubc-app-test:latest
     container_name: ubc-test-runner
     env_file:

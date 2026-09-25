@@ -1,6 +1,14 @@
 # HTTP (prod): ACME challenge + редирект на HTTPS
 # Домен из .env (PROJECT_DOMAIN), envsubst при старте контейнера
 
+# Запросы с неизвестным Host (сканеры, чужие домены на наш IP) —
+# закрыть соединение без ответа, а не отражать Host в 301
+server {
+    listen 80 default_server;
+    server_name _;
+    return 444;
+}
+
 server {
     listen 80;
     server_name ${PROJECT_DOMAIN};
@@ -11,8 +19,8 @@ server {
         default_type "text/plain";
     }
 
-    # Остальное — на HTTPS
+    # Остальное — на HTTPS (домен из конфига, не из заголовка Host)
     location / {
-        return 301 https://$host$request_uri;
+        return 301 https://${PROJECT_DOMAIN}$request_uri;
     }
 }

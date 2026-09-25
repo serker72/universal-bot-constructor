@@ -6,6 +6,9 @@
 #   1) временный самоподписанный сертификат -> nginx стартует;
 #   2) временный сертификат удаляется, certbot выпускает настоящий (webroot);
 #   3) nginx -s reload, запуск certbot (цикл продления).
+# Перед удалением текущий сертификат (временный или staging) копируется в
+# /etc/letsencrypt/.ubc-backup; при сбое выпуска он восстанавливается — nginx
+# не уходит в restart-loop «cannot load certificate» после рестарта.
 #
 # Параметры — из .env (PROJECT_ENVIRONMENT=prod, PROJECT_DOMAIN, CERTBOT_EMAIL,
 # CERTBOT_DATA_DIR) через docker compose; каталоги ${CERTBOT_DATA_DIR}/{conf,www}
@@ -41,6 +44,36 @@ compose() { docker compose "$@"; }
 # Команда в контейнере certbot (переменные PROJECT_DOMAIN/CERTBOT_EMAIL — из environment)
 # (-T: без TTY — чистый stdout для подстановки $(...))
 certbot_sh() { compose run --rm --no-deps -T --entrypoint sh certbot -c "$1"; }
+
+# Резервная копия live/archive/renewal домена (восстановление при сбое выпуска)
+BACKUP_DONE=0
+backup_cert() {
+    certbot_sh '
+        b=/etc/letsencrypt/.ubc-backup
+        rm -rf "$b" && mkdir -p "$b/live" "$b/archive" "$b/renewal"
+        d="$PROJECT_DOMAIN"
+        [ -e "/etc/letsencrypt/live/$d" ] && cp -a "/etc/letsencrypt/live/$d" "$b/live/"
+        [ -e "/etc/letsencrypt/archive/$d" ] && cp -a "/etc/letsencrypt/archive/$d" "$b/archive/"
+        [ -f "/etc/letsencrypt/renewal/$d.conf" ] && cp -a "/etc/letsencrypt/renewal/$d.conf" "$b/renewal/"
+        true
+    '
+    BACKUP_DONE=1
+}
+restore_cert() {
+    echo "### Восстановление предыдущего сертификата" >&2
+    certbot_sh '
+        b=/etc/letsencrypt/.ubc-backup
+        d="$PROJECT_DOMAIN"
+        [ -d "$b" ] || exit 0
+        rm -rf "/etc/letsencrypt/live/$d" "/etc/letsencrypt/archive/$d" "/etc/letsencrypt/renewal/$d.conf"
+        mkdir -p /etc/letsencrypt/live /etc/letsencrypt/archive /etc/letsencrypt/renewal
+        [ -e "$b/live/$d" ] && cp -a "$b/live/$d" /etc/letsencrypt/live/
+        [ -e "$b/archive/$d" ] && cp -a "$b/archive/$d" /etc/letsencrypt/archive/
+        [ -f "$b/renewal/$d.conf" ] && cp -a "$b/renewal/$d.conf" /etc/letsencrypt/renewal/
+        true
+    '
+}
+drop_backup() { certbot_sh 'rm -rf /etc/letsencrypt/.ubc-backup'; }
 
 # --- проверки окружения ---
 if ! compose config --services | grep -qx certbot; then
@@ -80,7 +113,8 @@ elif [ "$state" != none ]; then
         echo "Уже выпущен боевой сертификат; замена на staging — только с --force." >&2
         exit 1
     fi
-    echo "### Удаление сертификата $state (certbot delete)"
+    echo "### Резервная копия и удаление сертификата $state (certbot delete)"
+    backup_cert
     certbot_sh 'certbot delete --cert-name "$PROJECT_DOMAIN" --non-interactive'
 fi
 
@@ -101,7 +135,9 @@ compose up -d nginx
 compose exec -T nginx nginx -t
 
 # --- 2. выпуск настоящего сертификата ---
-echo "### Удаление временного сертификата"
+echo "### Удаление временного сертификата (с резервной копией)"
+# сохранённый ранее staging-сертификат не перезаписываем временным
+[ "$BACKUP_DONE" -eq 1 ] || backup_cert
 certbot_sh '
     if [ ! -f "/etc/letsencrypt/renewal/$PROJECT_DOMAIN.conf" ]; then
         rm -rf "/etc/letsencrypt/live/$PROJECT_DOMAIN" \
@@ -112,9 +148,14 @@ certbot_sh '
 echo "### Выпуск сертификата Let's Encrypt"
 staging_arg=""
 [ "$STAGING" -eq 1 ] && staging_arg="--staging"
-certbot_sh "certbot certonly --webroot -w /var/www/certbot \
+if ! certbot_sh "certbot certonly --webroot -w /var/www/certbot \
     -d \"\$PROJECT_DOMAIN\" --email \"\$CERTBOT_EMAIL\" \
-    --agree-tos --no-eff-email --non-interactive $staging_arg $force_arg"
+    --agree-tos --no-eff-email --non-interactive $staging_arg $force_arg"; then
+    echo "Выпуск сертификата не удался" >&2
+    restore_cert
+    exit 1
+fi
+drop_backup
 
 # --- 3. применение ---
 echo "### Перезагрузка nginx и запуск certbot (продление)"

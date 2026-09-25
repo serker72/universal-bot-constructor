@@ -1,37 +1,33 @@
 # Тестовый образ: prod-зависимости + dev-зависимости (pytest и т.д.) + тесты.
 # Используется сервисом test-runner (docker-compose.test.yml).
-# Сборка: docker build -t ubc-app-test:latest -f app/Dockerfile.test ./app
+# Контекст сборки — КОРЕНЬ проекта (uv.lock лежит в корне workspace):
+#   docker build -t ubc-app-test:latest -f app/Dockerfile.test .
 FROM python:3.13-slim
 
-# Системные зависимости
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libpq-dev \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# закреплённая версия uv (совпадает с форматом uv.lock)
+COPY --from=ghcr.io/astral-sh/uv:0.7.19 /uv /usr/local/bin/uv
 
-# Установка uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_PROJECT_ENVIRONMENT=/app/.venv
+
+WORKDIR /workspace
+# зависимости строго по uv.lock (--locked: сборка падает, если lock
+# рассинхронизирован с pyproject.toml), включая dev-группу ubc-app
+# (без `|| true`: любая ошибка установки валит сборку)
+COPY pyproject.toml uv.lock ./
+COPY app/pyproject.toml ./app/
+RUN uv sync --locked --package ubc-app --no-install-workspace
+COPY app/src/ ./app/src/
+RUN uv sync --locked --package ubc-app --no-editable
 
 WORKDIR /app
-
-# Копируем исходники, тесты и зависимости, затем ставим пакет (editable):
-# важно скопировать src/ ДО установки — иначе setuptools не найдёт пакет
-COPY pyproject.toml ./
-COPY src/ ./src/
-COPY tests/ ./tests/
-COPY alembic.ini* ./
-COPY alembic/ ./alembic/
-
-# Установка пакета + dev-зависимостей из [tool.uv.dev-dependencies]
-# (uv pip install -e . их не включает, поэтому отдельный uv export)
-RUN uv venv /app/.venv && \
-    uv pip install --python /app/.venv/bin/python -e . && \
-    uv export --no-hashes --format requirements-txt -o /tmp/dev-requirements.txt && \
-    grep -v '^-' /tmp/dev-requirements.txt > /tmp/reqs.txt || true; \
-    if [ -s /tmp/reqs.txt ]; then \
-      uv pip install --python /app/.venv/bin/python -r /tmp/reqs.txt; \
-    fi
+COPY app/pyproject.toml ./
+COPY app/src/ ./src/
+COPY app/tests/ ./tests/
+COPY app/alembic.ini ./
+COPY app/alembic/ ./alembic/
 
 # Активируем venv
 ENV PATH="/app/.venv/bin:$PATH"

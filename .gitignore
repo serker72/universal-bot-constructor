@@ -31,3 +31,6 @@ frontend/.output/
 # --- IDE ---
 .idea/
 .vscode/
+
+# --- Артефакты ревью и задач агента ---
+.tasks/

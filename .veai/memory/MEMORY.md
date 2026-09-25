@@ -1,0 +1,2 @@
+- [API transaction commit before response](API_transaction_commit_before_response-31586e0297f2.md) — TransactionalRoute commits DB session before FastAPI response; dishka REQUEST finalizer runs after response is sent
+- [Docker build context and uv.lock sync](Docker_build_context_and_uv_lock_sync-b6b17868c54b.md) — app/Dockerfile build context is repo root; uv sync --locked; uv.lock and package-lock must stay in sync

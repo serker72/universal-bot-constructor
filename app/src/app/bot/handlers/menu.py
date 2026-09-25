@@ -1,9 +1,13 @@
-"""Хендлеры меню: категории → объекты → страница объекта → PDF."""
+"""Хендлеры меню: категории → объекты → страница объекта → PDF.
+
+Заблокированные посетители отсекаются BlockedVisitorMiddleware (в т.ч. по
+старым кнопкам); ensure_visitor дополнительно требует завершённой регистрации.
+"""
 
 from aiogram import F, Router
 from aiogram import html
-from aiogram.types import CallbackQuery
-from aiogram.types import FSInputFile
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import CallbackQuery, FSInputFile, Message
 from dishka.integrations.aiogram import FromDishka
 
 from app.bot.html_sanitize import sanitize_html
@@ -18,23 +22,66 @@ from app.bot.keyboards import (
     objects_keyboard,
 )
 from app.bot.services import BotService
-from app.services.pdf import PdfService
+from app.domain.models import Visitor
+from app.log import get_logger
+from app.services.pdf import PdfError, PdfService
 
 router = Router(name="menu")
 
+log = get_logger(__name__)
 
-async def ensure_visitor(callback: CallbackQuery, bot_service: BotService) -> bool:
-    """Посетитель зарегистрирован и не заблокирован."""
+CATEGORIES_TEXT = "Выберите категорию:"
+
+
+async def ensure_visitor(
+    callback: CallbackQuery, bot_service: BotService
+) -> Visitor | None:
+    """Посетитель зарегистрирован и не заблокирован (иначе — alert и None)."""
     visitor = await bot_service.get_visitor(callback.from_user.id)
     if visitor is None:
         await callback.answer(
             "Сначала завершите регистрацию (/start)", show_alert=True
         )
-        return False
+        return None
     if visitor.is_blocked:
         await callback.answer("Вы заблокированы", show_alert=True)
-        return False
-    return True
+        return None
+    return visitor
+
+
+async def send_categories_menu(
+    message: Message, bot_service: BotService, *, page: int = 0, edit: bool = False
+) -> None:
+    """Меню категорий (страница page): новое сообщение или правка текущего."""
+    items, pages, page = await bot_service.list_categories(page)
+    if not items:
+        text, markup = "Категории пока не добавлены.", back_to_categories_keyboard()
+    else:
+        text, markup = CATEGORIES_TEXT, categories_keyboard(items, page, pages)
+    if edit:
+        await message.edit_text(text, reply_markup=markup)
+    else:
+        await message.answer(text, reply_markup=markup)
+
+
+async def _show_objects_page(
+    callback: CallbackQuery, bot_service: BotService, category_id: int, page: int
+) -> None:
+    """Страница объектов категории (общая для выбора категории и «К объектам»)."""
+    if not await ensure_visitor(callback, bot_service):
+        return
+    items, pages, page = await bot_service.list_objects(category_id, page)
+    if not items:
+        await callback.message.edit_text(  # type: ignore[union-attr]
+            "В этой категории пока нет объектов.",
+            reply_markup=back_to_categories_keyboard(),
+        )
+    else:
+        await callback.message.edit_text(  # type: ignore[union-attr]
+            "Выберите объект:",
+            reply_markup=objects_keyboard(category_id, items, page, pages),
+        )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "noop")
@@ -51,11 +98,7 @@ async def show_main_menu(
     """Главное меню: список активных категорий (первая страница)."""
     if not await ensure_visitor(callback, bot_service):
         return
-    items, pages = await bot_service.list_categories(0)
-    await callback.message.edit_text(  # type: ignore[union-attr]
-        "Выберите категорию:",
-        reply_markup=categories_keyboard(items, 0, pages),
-    )
+    await send_categories_menu(callback.message, bot_service, edit=True)  # type: ignore[arg-type]
     await callback.answer()
 
 
@@ -68,17 +111,11 @@ async def show_categories(
     """Список активных категорий (с пагинацией)."""
     if not await ensure_visitor(callback, bot_service):
         return
-    items, pages = await bot_service.list_categories(callback_data.page)
-    if not items:
-        await callback.message.edit_text(  # type: ignore[union-attr]
-            "Категории пока не добавлены.",
-            reply_markup=back_to_categories_keyboard(),
-        )
-        await callback.answer()
-        return
-    await callback.message.edit_text(  # type: ignore[union-attr]
-        "Выберите категорию:",
-        reply_markup=categories_keyboard(items, callback_data.page, pages),
+    await send_categories_menu(
+        callback.message,  # type: ignore[arg-type]
+        bot_service,
+        page=callback_data.page,
+        edit=True,
     )
     await callback.answer()
 
@@ -91,25 +128,9 @@ async def show_objects(
 ) -> None:
     """Список активных объектов категории (с пагинацией)."""
     assert callback_data.category_id is not None  # гарантировано фильтром
-    if not await ensure_visitor(callback, bot_service):
-        return
-    items, pages = await bot_service.list_objects(
-        callback_data.category_id, callback_data.page
+    await _show_objects_page(
+        callback, bot_service, callback_data.category_id, callback_data.page
     )
-    if not items:
-        await callback.message.edit_text(  # type: ignore[union-attr]
-            "В этой категории пока нет объектов.",
-            reply_markup=back_to_categories_keyboard(),
-        )
-        await callback.answer()
-        return
-    await callback.message.edit_text(  # type: ignore[union-attr]
-        "Выберите объект:",
-        reply_markup=objects_keyboard(
-            callback_data.category_id, items, callback_data.page, pages
-        ),
-    )
-    await callback.answer()
 
 
 @router.callback_query(ObjectCB.filter(F.object_id.is_(None)))
@@ -119,26 +140,9 @@ async def back_to_objects(
     bot_service: FromDishka[BotService],
 ) -> None:
     """Кнопка «К объектам»: список объектов категории (с пагинацией)."""
-    assert callback_data.category_id is not None  # гарантировано схемой
-    if not await ensure_visitor(callback, bot_service):
-        return
-    items, pages = await bot_service.list_objects(
-        callback_data.category_id, callback_data.page
+    await _show_objects_page(
+        callback, bot_service, callback_data.category_id, callback_data.page
     )
-    if not items:
-        await callback.message.edit_text(  # type: ignore[union-attr]
-            "В этой категории пока нет объектов.",
-            reply_markup=back_to_categories_keyboard(),
-        )
-        await callback.answer()
-        return
-    await callback.message.edit_text(  # type: ignore[union-attr]
-        "Выберите объект:",
-        reply_markup=objects_keyboard(
-            callback_data.category_id, items, callback_data.page, pages
-        ),
-    )
-    await callback.answer()
 
 
 @router.callback_query(ObjectCB.filter(F.object_id.is_not(None)))
@@ -149,6 +153,8 @@ async def show_object(
 ) -> None:
     """Страница объекта: наименование, описание, PDF, заявка."""
     assert callback_data.object_id is not None  # гарантировано фильтром
+    if not await ensure_visitor(callback, bot_service):
+        return
     obj = await bot_service.get_object(callback_data.object_id)
     if obj is None:
         await callback.answer("Объект не найден", show_alert=True)
@@ -157,15 +163,27 @@ async def show_object(
         f"<b>{html.quote(obj.name)}</b>\n\n"
         f"{sanitize_html(obj.short_description) or 'Описание отсутствует.'}"
     )
-    await callback.message.edit_text(  # type: ignore[union-attr]
-        text,
-        reply_markup=object_keyboard(
-            obj.category_id,
-            obj.id,
-            request_button_text=obj.category.button_text,
-        ),
-        parse_mode="HTML",
-    )
+    try:
+        await callback.message.edit_text(  # type: ignore[union-attr]
+            text,
+            reply_markup=object_keyboard(
+                obj.category_id,
+                obj.id,
+                request_button_text=obj.category.button_text,
+            ),
+        )
+    except TelegramBadRequest:
+        # описание не прошло проверку Telegram (длина/разметка) — карточка
+        # без описания вместо «вечного» индикатора загрузки
+        log.warning("object_card_render_failed", object_id=obj.id)
+        await callback.message.edit_text(  # type: ignore[union-attr]
+            f"<b>{html.quote(obj.name)}</b>",
+            reply_markup=object_keyboard(
+                obj.category_id,
+                obj.id,
+                request_button_text=obj.category.button_text,
+            ),
+        )
     await callback.answer()
 
 
@@ -176,18 +194,36 @@ async def send_pdf(
     bot_service: FromDishka[BotService],
     pdf_service: FromDishka[PdfService],
 ) -> None:
-    """Отправить PDF объекта документом Telegram."""
+    """Отправить PDF объекта документом Telegram.
+
+    Повторная отправка — по сохранённому file_id (без загрузки файла заново);
+    file_id сбрасывается при замене PDF.
+    """
+    if not await ensure_visitor(callback, bot_service):
+        return
     obj = await bot_service.get_object(callback_data.object_id)
     if obj is None or not obj.pdf_path:
         await callback.answer("PDF не загружен", show_alert=True)
         return
+    await callback.answer()
+    if obj.telegram_file_id:
+        try:
+            await callback.message.answer_document(  # type: ignore[union-attr]
+                document=obj.telegram_file_id,
+                caption=html.quote(obj.name),
+            )
+            return
+        except TelegramBadRequest:
+            # file_id устарел — отправляем файл заново
+            log.warning("pdf_file_id_invalid", object_id=obj.id)
     try:
         path = pdf_service.open(obj.pdf_path)
-    except Exception:
-        await callback.answer("Файл не найден", show_alert=True)
+    except PdfError:
+        await callback.message.answer("Файл не найден")  # type: ignore[union-attr]
         return
-    await callback.answer()
-    await callback.message.answer_document(  # type: ignore[union-attr]
+    sent = await callback.message.answer_document(  # type: ignore[union-attr]
         document=FSInputFile(path),
-        caption=obj.name,
+        caption=html.quote(obj.name),
     )
+    if sent.document is not None:
+        await bot_service.save_pdf_file_id(obj.id, obj.pdf_path, sent.document.file_id)

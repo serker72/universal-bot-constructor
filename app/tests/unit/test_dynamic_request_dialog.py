@@ -167,6 +167,7 @@ async def test_go_back_to_time_hours(manager_text_number_time):
 
 
 async def test_go_back_from_first_step(manager_text_number_time):
+    """«Назад» на первом поле — к шагу телефона (а не в то же окно)."""
     from app.bot.dialogs.dynamic_request_dialog import go_back
 
     m = manager_text_number_time
@@ -174,7 +175,156 @@ async def test_go_back_from_first_step(manager_text_number_time):
     await go_back(m)
     # не уходим в минус
     assert m.dialog_data["current_step"] == 0
-    assert m.switched_to is DynamicRequestSG.input_text
+    assert m.switched_to is DynamicRequestSG.input_phone
+
+
+async def test_go_back_from_summary_to_last_field(manager_text_number_time):
+    from app.bot.dialogs.dynamic_request_dialog import go_back
+
+    m = manager_text_number_time
+    m.dialog_data["current_step"] = 3  # summary (за концом схемы)
+    await go_back(m)
+    assert m.dialog_data["current_step"] == 2
+    assert m.switched_to is DynamicRequestSG.input_time_hour
+
+
+# -- NUMBER: разбор ввода -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"), [("5", 5), ("2.5", 2.5), ("2,5", 2.5), ("-3", -3)]
+)
+def test_parse_number(text, expected):
+    from app.bot.dialogs.dynamic_request_dialog import parse_number
+
+    assert parse_number(text) == expected
+
+
+# -- SELECT: индекс опции в callback, проверка значений ----------------------
+
+
+class CallbackStub:
+    def __init__(self) -> None:
+        self.alerts: list[str] = []
+
+    async def answer(self, text: str | None = None, show_alert: bool = False) -> None:
+        if text:
+            self.alerts.append(text)
+
+
+LONG_OPTION = "Консультация специалиста"
+
+
+@pytest.fixture
+def manager_select():
+    schema = [
+        _field(
+            1,
+            RequestFieldType.SELECT.value,
+            meta={"options": ["Первый", LONG_OPTION]},
+        ),
+    ]
+    return DialogManagerStub(schema)
+
+
+async def test_select_options_use_index_ids(manager_select):
+    """В callback_data — индекс опции (≤ 64 байт), а не её текст."""
+    from app.bot.dialogs.getters import select_options_getter
+
+    data = await select_options_getter(manager_select)
+    assert data["options"] == [("Первый", "0"), (LONG_OPTION, "1")]
+    assert len(LONG_OPTION.encode()) > 40  # текст опции не влез бы в callback
+
+
+async def test_option_selected_by_index(manager_select):
+    from app.bot.dialogs.dynamic_request_dialog import on_option_selected
+
+    m = manager_select
+    await on_option_selected(CallbackStub(), None, m, 1)
+    assert m.start_data["answers"][1] == LONG_OPTION
+    assert m.switched_to is DynamicRequestSG.summary
+
+
+async def test_forged_option_index_rejected(manager_select):
+    from app.bot.dialogs.dynamic_request_dialog import on_option_selected
+
+    m = manager_select
+    cb = CallbackStub()
+    await on_option_selected(cb, None, m, 99)
+    assert cb.alerts and m.start_data["answers"] == {}
+    assert m.switched_to is None
+
+
+async def test_forged_hour_and_minute_rejected(manager_text_number_time):
+    from app.bot.dialogs.dynamic_request_dialog import (
+        on_hour_selected,
+        on_minute_selected,
+    )
+
+    m = manager_text_number_time
+    m.dialog_data["current_step"] = 2  # TIME, шаг минут 15
+    cb = CallbackStub()
+    await on_hour_selected(cb, None, m, 99)
+    assert "temp_hour" not in m.dialog_data
+    m.dialog_data["temp_hour"] = 10
+    await on_minute_selected(cb, None, m, 7)  # не кратно шагу 15
+    assert 3 not in m.start_data["answers"]
+    assert len(cb.alerts) == 2
+
+
+async def test_skip_optional_select_field(manager_select):
+    """Необязательное SELECT-поле можно пропустить кнопкой."""
+    from app.bot.dialogs.dynamic_request_dialog import on_skip_field
+
+    m = manager_select
+    await on_skip_field(CallbackStub(), None, m)
+    assert m.start_data["answers"][1] is None
+    assert m.switched_to is DynamicRequestSG.summary
+
+
+async def test_skip_required_field_rejected():
+    from app.bot.dialogs.dynamic_request_dialog import on_skip_field
+
+    m = DialogManagerStub([_field(1, RequestFieldType.TIME.value, required=True)])
+    cb = CallbackStub()
+    await on_skip_field(cb, None, m)
+    assert cb.alerts and m.start_data["answers"] == {}
+
+
+# -- DATE: границы и проверка на сервере --------------------------------------
+
+
+def test_add_years_leap_day():
+    """29 февраля + 2 года → 28 февраля (без ValueError)."""
+    from datetime import date
+
+    from app.bot.widgets.ru_calendar import add_years, date_bounds
+
+    assert add_years(date(2028, 2, 29), 2) == date(2030, 2, 28)
+    assert date_bounds(date(2028, 2, 29)) == (date(2028, 2, 29), date(2030, 2, 28))
+
+
+async def test_past_date_rejected():
+    from datetime import timedelta
+
+    from app.bot.dialogs.dynamic_request_dialog import on_date_selected
+    from app.bot.widgets.ru_calendar import today_moscow
+
+    m = DialogManagerStub([_field(1, RequestFieldType.DATE.value)])
+    cb = CallbackStub()
+    await on_date_selected(cb, None, m, today_moscow() - timedelta(days=1))
+    assert m.start_data["answers"] == {}
+    await on_date_selected(cb, None, m, today_moscow())
+    assert m.start_data["answers"][1] == today_moscow().isoformat()
+
+
+async def test_calendar_bounds_computed_per_render():
+    """RuCalendar берёт границы на каждый рендер (а не при импорте)."""
+    from app.bot.dialogs.dynamic_request_dialog import _CALENDAR_WIDGET
+    from app.bot.widgets.ru_calendar import date_bounds
+
+    config = await _CALENDAR_WIDGET._get_user_config({}, None)
+    assert (config.min_date, config.max_date) == date_bounds()
 
 
 # -- JSON round-trip start_data (ключи answers становятся строками) ----------

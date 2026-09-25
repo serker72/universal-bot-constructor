@@ -14,11 +14,17 @@
   типу следующего поля (TIME → input_time_hour), конец схемы → summary;
 - on_hour_selected / on_minute_selected — двухшаговый ввод времени
   (temp_hour), минуты склеиваются в "ЧЧ:ММ" и передаются в process_and_go_next;
-- назад — по current_step - 1 (TIME → input_time_hour).
+- назад — по current_step - 1 (TIME → input_time_hour), с первого поля —
+  к шагу телефона.
+
+Значения из callback (час, минуты, индекс опции, дата) проверяются на
+сервере: aiogram-dialog передаёт в on_click любое значение из callback_data,
+ограничения виджетов (min/max_date, список опций) действуют только при отрисовке.
 """
 
 from datetime import date
 
+from aiogram import html
 from aiogram.types import CallbackQuery, Message
 from aiogram_dialog import Dialog, DialogManager, Window
 from aiogram_dialog.widgets.input import MessageInput
@@ -32,24 +38,36 @@ from aiogram_dialog.widgets.kbd import (
 from aiogram_dialog.widgets.text import Const, Format
 
 from app.bot.dialogs.getters import (
+    current_field,
+    current_step,
     field_getter,
+    field_minute_step,
+    field_options,
     get_bot_service,
-    hours_getter_factory,
+    hours_getter,
     manager_start_answers,
     minutes_getter,
     normalize_answers,
     profile_getter,
+    schema_of,
     select_options_getter,
     summary_getter,
 )
-from app.bot.dialogs.time_items import generate_hours
 from app.bot.services import BotService, BotServiceError
 from app.bot.states import DynamicRequestSG
 from app.bot.validators import normalize_phone
-from app.bot.widgets.ru_calendar import RuCalendar
+from app.bot.widgets.ru_calendar import RuCalendar, date_bounds
 from app.domain.models import RequestFieldType
+from app.domain.models.request_field_value import VALUE_TEXT_MAX_LENGTH
 
 BACK_TEXT = Const("⬅️ Назад")
+
+# Длина TEXT-поля по умолчанию (meta_data.max_length не задан)
+DEFAULT_TEXT_MAX_LENGTH = 1000
+
+# Окна диалога — простой текст (как до parse_mode=HTML по умолчанию у Bot):
+# в summary выводится пользовательский ввод
+WINDOW_PARSE_MODE = None
 
 # Состояние по типу поля (TIME → окно часов, минуты следуют без смены шага)
 _STATE_BY_TYPE = {
@@ -66,10 +84,6 @@ _STATE_BY_TYPE = {
 # ---------------------------------------------------------------------------
 
 
-def _schema(manager: DialogManager) -> list[dict]:
-    return manager.start_data.get("schema", [])
-
-
 def _answers(manager: DialogManager) -> dict[int, str | None]:
     """Живой словарь ответов из start_data (запись по int-ключу).
 
@@ -84,21 +98,17 @@ def _get_answer(manager: DialogManager, field_id: int) -> str | None:
     return normalize_answers(_answers(manager)).get(field_id)
 
 
-def _current_step(manager: DialogManager) -> int:
-    return int(manager.dialog_data.get("current_step", 0))
-
-
-def _current_field(manager: DialogManager) -> dict | None:
-    schema = _schema(manager)
-    step = _current_step(manager)
-    if 0 <= step < len(schema):
-        return schema[step]
-    return None
-
-
 def _field_state(field: dict):
     """Состояние-окно по типу поля."""
     return _STATE_BY_TYPE[field["type"]]
+
+
+def _meta(field: dict | None) -> dict:
+    return (field or {}).get("meta_data") or {}
+
+
+def _field_is_type(field: dict | None, field_type: RequestFieldType) -> bool:
+    return field is not None and field["type"] == field_type.value
 
 
 # ---------------------------------------------------------------------------
@@ -108,12 +118,12 @@ def _field_state(field: dict):
 
 async def process_and_go_next(manager: DialogManager, value: str | None) -> None:
     """Записать ответ текущего поля, перейти к следующему (или summary)."""
-    field = _current_field(manager)
+    field = current_field(manager)
     if field is not None:
         _answers(manager)[field["id"]] = value
-    step = _current_step(manager) + 1
+    step = current_step(manager) + 1
     manager.dialog_data["current_step"] = step
-    schema = _schema(manager)
+    schema = schema_of(manager)
     if step >= len(schema):
         await manager.switch_to(DynamicRequestSG.summary)
         return
@@ -121,14 +131,31 @@ async def process_and_go_next(manager: DialogManager, value: str | None) -> None
 
 
 async def go_back(manager: DialogManager) -> None:
-    """Назад: к предыдущему полю схемы (TIME — к окну часов)."""
-    step = max(0, _current_step(manager) - 1)
-    manager.dialog_data["current_step"] = step
-    schema = _schema(manager)
-    if not schema:
+    """Назад: к предыдущему полю схемы (TIME — к окну часов).
+
+    С первого поля (и из summary при пустой схеме) — к шагу телефона.
+    """
+    schema = schema_of(manager)
+    step = current_step(manager) - 1
+    if not schema or step < 0:
+        manager.dialog_data["current_step"] = 0
         await manager.switch_to(DynamicRequestSG.input_phone)
         return
+    step = min(step, len(schema) - 1)
+    manager.dialog_data["current_step"] = step
     await manager.switch_to(_field_state(schema[step]))
+
+
+async def _skip_or_require(manager: DialogManager, callback: CallbackQuery) -> bool:
+    """Пропуск поля: обязательное — отказ (alert), необязательное — None."""
+    field = current_field(manager)
+    if field is not None and field["is_required"]:
+        await callback.answer(
+            f"Поле «{field['label']}» обязательно.", show_alert=True
+        )
+        return False
+    await process_and_go_next(manager, None)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +183,7 @@ async def on_use_profile_phone(
 async def on_phone_input(
     message: Message, widget: MessageInput, manager: DialogManager,
 ) -> None:
-    """Перехват нового номера: текст или контакт."""
+    """Перехват нового номера: текст или контакт (сохраняется в профиле)."""
     raw = None
     if message.contact is not None:
         raw = message.contact.phone_number
@@ -169,12 +196,18 @@ async def on_phone_input(
         )
         return
     manager.dialog_data["phone"] = phone
+    # новый номер обновляет профиль посетителя (виден в админке)
+    service: BotService = await get_bot_service(manager)
+    try:
+        await service.update_visitor_phone(message.from_user.id, phone)  # type: ignore[union-attr]
+    except BotServiceError:
+        pass  # посетитель не найден — заявка всё равно получит номер
     await _after_phone(manager)
 
 
 async def _after_phone(manager: DialogManager) -> None:
     """Переход после телефона: первое поле схемы или сразу summary."""
-    schema = _schema(manager)
+    schema = schema_of(manager)
     manager.dialog_data["current_step"] = 0
     if not schema:
         await manager.switch_to(DynamicRequestSG.summary)
@@ -187,21 +220,45 @@ async def _after_phone(manager: DialogManager) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _text_max_length(field: dict | None) -> int:
+    try:
+        value = int(_meta(field).get("max_length", DEFAULT_TEXT_MAX_LENGTH))
+    except (TypeError, ValueError):
+        value = DEFAULT_TEXT_MAX_LENGTH
+    return max(1, min(value, VALUE_TEXT_MAX_LENGTH))
+
+
+def _meta_number(field: dict | None, key: str) -> float | None:
+    """Число из meta_data (пустые/нечисловые значения игнорируются)."""
+    value = _meta(field).get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return value
+
+
+def parse_number(text: str) -> int | float:
+    """Число из ввода: «5», «2.5», «2,5» (запятая — десятичный разделитель)."""
+    normalized = text.replace(",", ".")
+    if "." in normalized:
+        return float(normalized)
+    return int(normalized)
+
+
 async def on_text_input(
     message: Message, widget: MessageInput, manager: DialogManager,
 ) -> None:
     """Ввод TEXT-поля («-» → пропуск, если не обязательное)."""
-    field = _current_field(manager)
+    field = current_field(manager)
     text = (message.text or "").strip()
     if text == "-":
         if field and field["is_required"]:
             await message.answer(
-                f"Поле «{field['label']}» обязательно. Введите значение:"
+                f"Поле «{html.quote(field['label'])}» обязательно. Введите значение:"
             )
             return
         await process_and_go_next(manager, None)
         return
-    max_length = int((field or {}).get("meta_data", {}).get("max_length", 1000))
+    max_length = _text_max_length(field)
     if len(text) > max_length:
         await message.answer(f"Максимум {max_length} символов. Введите короче:")
         return
@@ -212,24 +269,23 @@ async def on_number_input(
     message: Message, widget: MessageInput, manager: DialogManager,
 ) -> None:
     """Ввод NUMBER-поля («-» → пропуск, если не обязательное)."""
-    field = _current_field(manager)
+    field = current_field(manager)
     text = (message.text or "").strip()
     if text == "-":
         if field and field["is_required"]:
             await message.answer(
-                f"Поле «{field['label']}» обязательно. Введите число:"
+                f"Поле «{html.quote(field['label'])}» обязательно. Введите число:"
             )
             return
         await process_and_go_next(manager, None)
         return
     try:
-        value = float(text) if "." in text or "," in text else int(text.replace(",", "."))
+        value = parse_number(text)
     except ValueError:
         await message.answer("Введите число (например 5 или 2.5):")
         return
-    meta = (field or {}).get("meta_data", {})
-    minimum = meta.get("min")
-    maximum = meta.get("max")
+    minimum = _meta_number(field, "min")
+    maximum = _meta_number(field, "max")
     if minimum is not None and value < minimum:
         await message.answer(f"Минимум: {minimum}. Введите число:")
         return
@@ -243,9 +299,25 @@ async def on_number_input(
 async def on_skip_field(
     callback: CallbackQuery, button: Button, manager: DialogManager,
 ) -> None:
-    """Кнопка «Пропустить» (необязательное поле)."""
+    """Кнопка «Пропустить» (необязательное поле; проверяется на сервере)."""
+    if await _skip_or_require(manager, callback):
+        await callback.answer()
+
+
+async def on_skip_input(
+    message: Message, widget: MessageInput, manager: DialogManager,
+) -> None:
+    """Текст «-» в окнах выбора (дата/время/вариант) — пропуск необязательного поля."""
+    field = current_field(manager)
+    if (message.text or "").strip() != "-":
+        await message.answer("Выберите значение кнопкой ниже.")
+        return
+    if field is not None and field["is_required"]:
+        await message.answer(
+            f"Поле «{html.quote(field['label'])}» обязательно. Выберите значение кнопкой:"
+        )
+        return
     await process_and_go_next(manager, None)
-    await callback.answer()
 
 
 # ---------------------------------------------------------------------------
@@ -254,24 +326,26 @@ async def on_skip_field(
 
 
 def _calendar_config() -> CalendarConfig:
-    """Конфиг календаря: от сегодня до +2 лет (вычисляется на каждый рендер)."""
-    today = date.today()
-    return CalendarConfig(
-        firstweekday=0,
-        min_date=today,
-        max_date=today.replace(year=today.year + 2),
-    )
+    """Базовый конфиг календаря (неделя с понедельника).
 
-
-async def _calendar_getter(**kwargs) -> dict:
-    """Геттер окна с датами: свежий CalendarConfig на каждый рендер."""
-    return {"calendar_config": _calendar_config()}
+    Границы дат (сегодня по МСК … +2 года) вычисляются на каждый рендер
+    в RuCalendar._get_user_config.
+    """
+    return CalendarConfig(firstweekday=0)
 
 
 async def on_date_selected(
     event, widget: ManagedCalendar, manager: DialogManager, selected_date: date,
 ) -> None:
-    """Выбор даты в календаре → ISO-строка в answers."""
+    """Выбор даты в календаре → ISO-строка в answers (с проверкой границ)."""
+    if not _field_is_type(current_field(manager), RequestFieldType.DATE):
+        return
+    min_date, max_date = date_bounds()
+    if not min_date <= selected_date <= max_date:
+        answer = getattr(event, "answer", None)
+        if answer is not None:
+            await answer("Эта дата недоступна", show_alert=True)
+        return
     await process_and_go_next(manager, selected_date.isoformat())
 
 
@@ -284,6 +358,11 @@ async def on_hour_selected(
     callback: CallbackQuery, select: Select, manager: DialogManager, hour: int,
 ) -> None:
     """Выбор часа → окно минут (current_step не меняется)."""
+    if not 0 <= hour <= 23 or not _field_is_type(
+        current_field(manager), RequestFieldType.TIME
+    ):
+        await callback.answer("Недопустимое значение", show_alert=True)
+        return
     manager.dialog_data["temp_hour"] = hour
     await manager.switch_to(DynamicRequestSG.input_time_minute)
 
@@ -292,7 +371,18 @@ async def on_minute_selected(
     callback: CallbackQuery, select: Select, manager: DialogManager, minute: int,
 ) -> None:
     """Выбор минут: склеить «ЧЧ:ММ» → главный роутинг."""
-    hour = int(manager.dialog_data.get("temp_hour", 0))
+    field = current_field(manager)
+    hour = manager.dialog_data.get("temp_hour")
+    step = field_minute_step(field)
+    if (
+        not _field_is_type(field, RequestFieldType.TIME)
+        or not isinstance(hour, int)
+        or not 0 <= hour <= 23
+        or not 0 <= minute <= 59
+        or minute % step != 0
+    ):
+        await callback.answer("Недопустимое значение", show_alert=True)
+        return
     await process_and_go_next(manager, f"{hour:02d}:{minute:02d}")
 
 
@@ -310,10 +400,15 @@ async def on_back_to_hours(
 
 
 async def on_option_selected(
-    callback: CallbackQuery, select: Select, manager: DialogManager, option: str,
+    callback: CallbackQuery, select: Select, manager: DialogManager, index: int,
 ) -> None:
-    """Выбор опции SELECT-поля."""
-    await process_and_go_next(manager, option)
+    """Выбор опции SELECT-поля (в callback — индекс опции, текст берётся из схемы)."""
+    field = current_field(manager)
+    options = field_options(field)
+    if not _field_is_type(field, RequestFieldType.SELECT) or not 0 <= index < len(options):
+        await callback.answer("Недопустимый вариант", show_alert=True)
+        return
+    await process_and_go_next(manager, options[index])
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +420,7 @@ async def on_submit(
     callback: CallbackQuery, button: Button, manager: DialogManager,
 ) -> None:
     """Кнопка «Отправить»: валидация обязательных полей → создание заявки."""
-    schema = _schema(manager)
+    schema = schema_of(manager)
     missing = [
         f for f in schema
         if f["is_required"] and not _get_answer(manager, f["id"])
@@ -337,7 +432,7 @@ async def on_submit(
     try:
         req = await finalize_and_create(manager)
     except (BotServiceError, KeyError) as exc:
-        await callback.message.answer(f"Ошибка: {exc}")  # type: ignore[union-attr]
+        await callback.message.answer(f"Ошибка: {html.quote(str(exc))}")  # type: ignore[union-attr]
         await manager.done()
         return
     await manager.done()
@@ -349,13 +444,8 @@ async def on_submit(
 
 async def finalize_and_create(manager: DialogManager):
     """Финализация: создание заявки с динамическими полями через BotService."""
-    container = manager.middleware_data["dishka_container"]
-    service: BotService = await container.get(BotService)
-    visitor = await service.get_visitor(manager.event.from_user.id)
-    if visitor is None:
-        raise BotServiceError("Сначала завершите регистрацию (/start).")
-    if visitor.is_blocked:
-        raise BotServiceError("Вы заблокированы.")
+    service: BotService = await get_bot_service(manager)
+    visitor = await service.get_active_visitor(manager.event.from_user.id)
     return await service.create_request(
         visitor=visitor,
         object_id=int(manager.start_data["object_id"]),
@@ -367,8 +457,6 @@ async def finalize_and_create(manager: DialogManager):
 # ---------------------------------------------------------------------------
 # Виджеты (переиспользуемые между окнами)
 # ---------------------------------------------------------------------------
-
-HOURS = generate_hours()
 
 _CALENDAR_WIDGET = RuCalendar(
     id="cal_field_date",
@@ -408,8 +496,10 @@ _OPTIONS_ROW = ScrollingGroup(
     Select(
         Format("{item[0]}"),
         id="sel_option",
+        # индекс опции (а не текст): callback_data ≤ 64 байт
         item_id_getter=lambda item: item[1],
         items="options",
+        type_factory=int,
         on_click=on_option_selected,
     ),
     id="sg_options",
@@ -423,6 +513,9 @@ _SKIP_BUTTON = Button(
     on_click=on_skip_field,
     when="not_required",
 )
+
+# «-» в окнах с кнопками выбора — пропуск необязательного поля
+_SKIP_INPUT = MessageInput(on_skip_input, content_types="text")
 
 
 async def _on_back_click(
@@ -453,6 +546,7 @@ dialog = Dialog(
         MessageInput(on_phone_input, content_types=("text", "contact")),
         getter=profile_getter,
         state=DynamicRequestSG.input_phone,
+        parse_mode=WINDOW_PARSE_MODE,
     ),
     # -- Окно TEXT-поля --------------------------------------------------------
     Window(
@@ -462,6 +556,7 @@ dialog = Dialog(
         _BACK_BUTTON,
         getter=field_getter,
         state=DynamicRequestSG.input_text,
+        parse_mode=WINDOW_PARSE_MODE,
     ),
     # -- Окно NUMBER-поля ------------------------------------------------------
     Window(
@@ -471,31 +566,37 @@ dialog = Dialog(
         _BACK_BUTTON,
         getter=field_getter,
         state=DynamicRequestSG.input_number,
+        parse_mode=WINDOW_PARSE_MODE,
     ),
     # -- Окно DATE-поля --------------------------------------------------------
     Window(
         Format("{field_label}\nВыберите дату:"),
         _CALENDAR_WIDGET,
+        _SKIP_INPUT,
         _SKIP_BUTTON,
         _BACK_BUTTON,
-        # aiogram-dialog вызывает геттеры как getter(**middleware_data),
-        # где менеджер лежит под ключом "dialog_manager"
-        getter=lambda dialog_manager, **kw: _combined_getter(dialog_manager, kw),
+        getter=field_getter,
         state=DynamicRequestSG.input_date,
+        parse_mode=WINDOW_PARSE_MODE,
     ),
     # -- Окно TIME: часы --------------------------------------------------------
     Window(
         Format("{field_label}\nВыберите час:"),
         _HOURS_ROW,
+        _SKIP_INPUT,
+        _SKIP_BUTTON,
         _BACK_BUTTON,
-        # CompositeGetter: данные поля (field_label) + список часов/минут
-        getter=[field_getter, hours_getter_factory()],
+        # CompositeGetter: данные поля (field_label) + список часов
+        getter=[field_getter, hours_getter],
         state=DynamicRequestSG.input_time_hour,
+        parse_mode=WINDOW_PARSE_MODE,
     ),
     # -- Окно TIME: минуты -------------------------------------------------------
     Window(
         Format("{field_label}\nВыберите минуты:"),
         _MINUTES_ROW,
+        _SKIP_INPUT,
+        _SKIP_BUTTON,
         Button(
             Const("⬅️ К часам"),
             id="back_to_hours",
@@ -503,14 +604,18 @@ dialog = Dialog(
         ),
         getter=[field_getter, minutes_getter],
         state=DynamicRequestSG.input_time_minute,
+        parse_mode=WINDOW_PARSE_MODE,
     ),
     # -- Окно SELECT-поля ---------------------------------------------------------
     Window(
         Format("{field_label}\nВыберите вариант:"),
         _OPTIONS_ROW,
+        _SKIP_INPUT,
+        _SKIP_BUTTON,
         _BACK_BUTTON,
         getter=[field_getter, select_options_getter],
         state=DynamicRequestSG.input_select,
+        parse_mode=WINDOW_PARSE_MODE,
     ),
     # -- Summary -------------------------------------------------------------------
     Window(
@@ -523,12 +628,6 @@ dialog = Dialog(
         _BACK_BUTTON,
         getter=summary_getter,
         state=DynamicRequestSG.summary,
+        parse_mode=WINDOW_PARSE_MODE,
     ),
 )
-
-
-async def _combined_getter(manager: DialogManager, kwargs: dict) -> dict:
-    """Геттер окна DATE: данные поля + свежий CalendarConfig."""
-    result = await field_getter(manager, **kwargs)
-    result.update(await _calendar_getter())
-    return result

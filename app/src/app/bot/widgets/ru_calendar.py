@@ -10,13 +10,17 @@ _init_views и передаёт собственные Text-виджеты с р
 - навигация: ◀️ / ▶️, сегодня подсвечивается как «[ 17 ]».
 
 Неделя начинается с понедельника (firstweekday=0, см. CalendarConfig).
+
+Границы дат (сегодня по Москве … +2 года) вычисляются на каждый рендер
+в _get_user_config (а не один раз при импорте модуля).
 """
 
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
+from aiogram_dialog import DialogManager
 from aiogram_dialog.api.internal import TextWidget
 from aiogram_dialog.widgets.common import WhenCondition
-from aiogram_dialog.widgets.kbd import Calendar, CalendarScope
+from aiogram_dialog.widgets.kbd import Calendar, CalendarScope, CalendarUserConfig
 from aiogram_dialog.widgets.kbd.calendar_kbd import (
     CalendarDaysView,
     CalendarMonthView,
@@ -32,6 +36,32 @@ RU_MONTHS = (
 
 # week_day в заголовке дней: 1 = понедельник … 7 = воскресенье
 RU_WEEKDAYS = {1: "Пн", 2: "Вт", 3: "Ср", 4: "Чт", 5: "Пт", 6: "Сб", 7: "Вс"}
+
+# Часовой пояс «сегодня» (контейнер работает в UTC): Europe/Moscow —
+# UTC+3 без перехода на летнее время (фиксированное смещение не требует tzdata)
+MOSCOW_TZ = timezone(timedelta(hours=3), "MSK")
+# Горизонт выбора даты
+MAX_YEARS_AHEAD = 2
+
+
+def today_moscow() -> date:
+    """Сегодняшняя дата по Москве."""
+    return datetime.now(MOSCOW_TZ).date()
+
+
+def add_years(value: date, years: int) -> date:
+    """Дата + N лет; 29 февраля → 28 февраля невисокосного года."""
+    try:
+        return value.replace(year=value.year + years)
+    except ValueError:
+        return value.replace(year=value.year + years, day=28)
+
+
+def date_bounds(today: date | None = None) -> tuple[date, date]:
+    """Допустимый диапазон дат: от сегодня (МСК) до +MAX_YEARS_AHEAD лет."""
+    today = today or today_moscow()
+    return today, add_years(today, MAX_YEARS_AHEAD)
+
 
 
 class RuMonthText(Text):
@@ -58,7 +88,20 @@ class RuDaysHeaderText(Text):
 
 
 class RuCalendar(Calendar):
-    """Календарь с русскими названиями месяцев и дней недели."""
+    """Календарь с русскими названиями месяцев и дней недели.
+
+    Границы min/max_date и часовой пояс вычисляются на каждый рендер:
+    фиксированный при импорте CalendarConfig на следующий день разрешал
+    выбирать прошедшую дату.
+    """
+
+    async def _get_user_config(
+        self, data: dict, manager: DialogManager
+    ) -> CalendarUserConfig:
+        min_date, max_date = date_bounds()
+        return CalendarUserConfig(
+            timezone=MOSCOW_TZ, min_date=min_date, max_date=max_date
+        )
 
     def _init_views(self) -> dict[CalendarScope, CalendarScopeView]:
         days_view = CalendarDaysView(

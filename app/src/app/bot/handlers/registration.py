@@ -5,32 +5,39 @@ from aiogram import html
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from aiogram_dialog import DialogManager
 from dishka.integrations.aiogram import FromDishka
 
+from app.bot.handlers.menu import send_categories_menu
 from app.bot.html_sanitize import sanitize_html
-from app.bot.keyboards import ConsentCB, categories_keyboard, consent_keyboard
+from app.bot.keyboards import ConsentCB, consent_keyboard
+from app.bot.middlewares import BLOCKED_TEXT
 from app.bot.services import BotService
 from app.bot.states import RegistrationStates
 from app.bot.validators import normalize_phone
 
 router = Router(name="registration")
 
-BLOCKED_TEXT = "🚫 Вы заблокированы. Обратитесь к администрации."
-
 
 @router.message(CommandStart())
 async def cmd_start(
     message: Message,
     state: FSMContext,
+    dialog_manager: DialogManager,
     bot_service: FromDishka[BotService],
 ) -> None:
     """Точка входа: регистрация / блокировка / главное меню."""
     await state.clear()
+    # незавершённый диалог заявки (aiogram-dialog, свой стек в Redis) —
+    # сбросить, иначе следующий текст уйдёт в MessageInput старого окна
+    await dialog_manager.reset_stack()
     visitor = await bot_service.get_visitor(message.from_user.id)  # type: ignore[union-attr]
     if visitor is None:
         await state.set_state(RegistrationStates.full_name)
         welcome = await bot_service.app_settings.get_welcome_text()
-        await message.answer(f"{sanitize_html(welcome)}\n\nВведите ваше ФИО (полностью):")
+        prompt = "Введите ваше ФИО (полностью):"
+        text = f"{sanitize_html(welcome)}\n\n{prompt}" if welcome else prompt
+        await message.answer(text)
         return
     if visitor.is_blocked:
         await message.answer(BLOCKED_TEXT)
@@ -98,32 +105,18 @@ async def process_consent(
         phone=data.get("phone"),
     )
     await state.clear()
-    welcome = await bot_service.app_settings.get_welcome_text()
-    items, pages = await bot_service.list_categories(0)
     # сообщение с кнопкой согласия → подтверждение регистрации
     await callback.message.edit_text(  # type: ignore[union-attr]
         f"✅ Регистрация завершена, {html.quote(visitor.full_name)}!"
     )
-    # приветствие и меню — разными сообщениями (не сливаются);
-    # меню редактируется на месте при пагинации
-    if welcome:
-        await callback.message.answer(  # type: ignore[union-attr]
-            sanitize_html(welcome)
-        )
-    await callback.message.answer(
-        "Выберите категорию:",
-        reply_markup=categories_keyboard(items, 0, pages),
-    )
+    await _show_main_menu(callback.message, bot_service)  # type: ignore[arg-type]
     await callback.answer()
 
 
 async def _show_main_menu(message: Message, bot_service: BotService) -> None:
-    """Главное меню: приветствие и список категорий отдельными сообщениями."""
+    """Главное меню: приветствие и список категорий отдельными сообщениями
+    (меню редактируется на месте при пагинации)."""
     welcome = await bot_service.app_settings.get_welcome_text()
-    items, pages = await bot_service.list_categories(0)
     if welcome:
         await message.answer(sanitize_html(welcome))
-    await message.answer(
-        "Выберите категорию:",
-        reply_markup=categories_keyboard(items, 0, pages),
-    )
+    await send_categories_menu(message, bot_service)

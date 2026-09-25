@@ -1,7 +1,9 @@
 """Провайдеры бота: Bot (aiogram) и BotService."""
 
 from aiogram import Bot
+from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.enums import ParseMode
 from dishka import Provider, Scope, provide
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,7 +28,14 @@ class BotProvider(Provider):
             if settings.bot.proxy_url
             else AiohttpSession()
         )
-        return Bot(token=settings.bot.token, session=session)
+        # parse_mode=HTML по умолчанию: тексты (приветствие, согласие, карточка
+        # объекта) — санитизированный HTML; пользовательские данные всегда
+        # экранируются (html.quote)
+        return Bot(
+            token=settings.bot.token,
+            session=session,
+            default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+        )
 
     @provide(scope=Scope.REQUEST)
     def provide_bot_service(

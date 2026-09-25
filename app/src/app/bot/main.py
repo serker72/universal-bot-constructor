@@ -20,6 +20,11 @@ from faststream.rabbit import RabbitBroker
 
 from app.bot.dialogs.dynamic_request_dialog import dialog as request_dialog
 from app.bot.handlers import menu, registration, requests
+from app.bot.middlewares import (
+    BlockedVisitorMiddleware,
+    CommitBeforeTelegramMiddleware,
+    UpdateContainerMiddleware,
+)
 from app.bot.notifications import register_notification_consumers
 from app.config.settings import Settings
 from app.di import build_container
@@ -89,6 +94,12 @@ async def run() -> None:
         dp.include_router(request_dialog)
         # auto_inject=True — обернуть хендлеры inject'ом (FromDishka-параметры)
         setup_dishka(container, dp, auto_inject=True)
+        # после dishka (нужен контейнер обновления): commit БД перед вызовами
+        # Telegram и отсечение заблокированных посетителей
+        for observer in (dp.message, dp.callback_query):
+            observer.outer_middleware(UpdateContainerMiddleware())
+            observer.outer_middleware(BlockedVisitorMiddleware())
+        bot.session.middleware(CommitBeforeTelegramMiddleware())
         # middleware aiogram-dialog (DialogManager в хендлерах/виджетах)
         setup_dialogs(dp)
 

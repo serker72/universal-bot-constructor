@@ -173,9 +173,8 @@ def my_requests_keyboard(items, page: int, total: int):
     """Список моих заявок с пагинацией (1 кнопка в строке)."""
     builder = InlineKeyboardBuilder()
     for req in items:
-        status = req.status.value if hasattr(req.status, "value") else req.status
         builder.button(
-            text=f"{STATUS_EMOJI.get(status, '')} Заявка #{req.id}",
+            text=f"{STATUS_EMOJI.get(req.status.value, '')} Заявка #{req.id}",
             callback_data=RequestCB(request_id=req.id).pack(),
         )
     builder.adjust(1)

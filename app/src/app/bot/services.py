@@ -2,9 +2,11 @@
 
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.models import Category, Object, Request, RequestStatus, Visitor
+from app.domain.models.request_field_value import VALUE_TEXT_MAX_LENGTH
 from app.repository.category import CategoryRepository
 from app.repository.object import ObjectRepository
 from app.repository.request import RequestRepository
@@ -16,6 +18,15 @@ from app.services.events import EventPublisher, RequestCancelledEvent, RequestCr
 
 class BotServiceError(Exception):
     """Ошибка бизнес-логики бота (показывается пользователю)."""
+
+
+def _clamp_page(page: int, pages: int) -> int:
+    """Номер страницы в пределах 0..pages-1 (подделанный/устаревший callback)."""
+    return min(max(page, 0), pages - 1)
+
+
+def _pages(total: int, page_size: int) -> int:
+    return max(1, -(-total // page_size))
 
 
 class BotService:
@@ -40,12 +51,27 @@ class BotService:
         self.request_fields = request_fields
         self.app_settings = app_settings
         self.publisher = publisher
+        # кеш посетителя в пределах обновления (middleware, хендлер, диалог)
+        self._visitor_cache: dict[int, Visitor | None] = {}
 
     # -- регистрация --------------------------------------------------------
 
     async def get_visitor(self, telegram_id: int) -> Visitor | None:
-        """Посетитель по telegram_id."""
-        return await self.visitors.get_by_telegram_id(telegram_id)
+        """Посетитель по telegram_id (один запрос на обновление)."""
+        if telegram_id not in self._visitor_cache:
+            self._visitor_cache[telegram_id] = await self.visitors.get_by_telegram_id(
+                telegram_id
+            )
+        return self._visitor_cache[telegram_id]
+
+    async def get_active_visitor(self, telegram_id: int) -> Visitor:
+        """Зарегистрированный незаблокированный посетитель (или BotServiceError)."""
+        visitor = await self.get_visitor(telegram_id)
+        if visitor is None:
+            raise BotServiceError("Сначала завершите регистрацию (/start).")
+        if visitor.is_blocked:
+            raise BotServiceError("Вы заблокированы.")
+        return visitor
 
     async def register_visitor(
         self, telegram_id: int, full_name: str, phone: str | None = None
@@ -72,6 +98,7 @@ class BotService:
             visitor.consent_given = True
             visitor.consent_at = now
         await self.session.flush()
+        self._visitor_cache[telegram_id] = visitor
         await self.publisher.publish_visitor_registered(
             VisitorRegisteredEvent(
                 visitor_id=visitor.id,
@@ -83,12 +110,12 @@ class BotService:
 
     async def get_profile_phone(self, telegram_id: int) -> str | None:
         """Сохранённый телефон посетителя (для диалога заявки)."""
-        visitor = await self.visitors.get_by_telegram_id(telegram_id)
+        visitor = await self.get_visitor(telegram_id)
         return visitor.phone if visitor is not None else None
 
     async def update_visitor_phone(self, telegram_id: int, phone: str) -> None:
         """Обновить телефон в профиле (при вводе нового номера в диалоге заявки)."""
-        visitor = await self.visitors.get_by_telegram_id(telegram_id)
+        visitor = await self.get_visitor(telegram_id)
         if visitor is None:
             raise BotServiceError("Посетитель не найден")
         visitor.phone = phone
@@ -96,34 +123,49 @@ class BotService:
 
     # -- меню ---------------------------------------------------------------
 
-    async def list_categories(self, page: int) -> tuple[list[Category], int]:
-        """Страница активных категорий и общее число страниц."""
+    async def list_categories(self, page: int) -> tuple[list[Category], int, int]:
+        """Страница активных категорий: (элементы, всего страниц, номер страницы).
+
+        Номер страницы ограничивается диапазоном 0..pages-1.
+        """
         page_size = await self.app_settings.get_page_size()
-        items = await self.categories.list_active(limit=page_size, offset=page * page_size)
         total = await self.categories.count(Category.is_active.is_(True))
-        pages = max(1, -(-total // page_size))
-        return list(items), pages
+        pages = _pages(total, page_size)
+        page = _clamp_page(page, pages)
+        items = await self.categories.list_active(limit=page_size, offset=page * page_size)
+        return list(items), pages, page
 
     async def list_objects(
         self, category_id: int, page: int
-    ) -> tuple[list[Object], int]:
-        """Страница активных объектов категории и общее число страниц."""
+    ) -> tuple[list[Object], int, int]:
+        """Страница активных объектов активной категории: (элементы, страниц, номер)."""
         page_size = await self.app_settings.get_page_size()
+        total = await self.objects.count(
+            *self.objects.active_conditions(category_id)
+        )
+        pages = _pages(total, page_size)
+        page = _clamp_page(page, pages)
         items = await self.objects.list_by_category(
             category_id, only_active=True, limit=page_size, offset=page * page_size
         )
-        total = await self.objects.count(
-            Object.category_id == category_id, Object.is_active.is_(True)
-        )
-        pages = max(1, -(-total // page_size))
-        return list(items), pages
+        return list(items), pages, page
 
     async def get_object(self, object_id: int) -> Object | None:
-        """Активный объект по id (вместе с категорией — для текста кнопки)."""
+        """Активный объект активной категории (вместе с категорией — для текста кнопки)."""
         obj = await self.objects.get_with_category(object_id)
-        if obj is not None and obj.is_active:
+        if obj is not None and obj.is_active and obj.category.is_active:
             return obj
         return None
+
+    async def save_pdf_file_id(
+        self, object_id: int, pdf_path: str, file_id: str
+    ) -> None:
+        """Сохранить file_id отправленного PDF (только если PDF не заменён)."""
+        await self.session.execute(
+            update(Object)
+            .where(Object.id == object_id, Object.pdf_path == pdf_path)
+            .values(telegram_file_id=file_id)
+        )
 
     # -- заявки -------------------------------------------------------------
 
@@ -150,9 +192,15 @@ class BotService:
         ]
 
     async def get_request_values(self, request_id: int) -> list[tuple[str, str | None]]:
-        """Значения полей заявки (label, value) — для карточки «Мои заявки»."""
-        rows = await self.request_fields.list_values(request_id)
-        return [(f.label, v.value_text) for v, f in rows]
+        """Значения полей заявки (label, value) — для карточки «Мои заявки».
+
+        Один путь чтения значений — RequestRepository.get_with_values.
+        """
+        req = await self.requests.get_with_values(request_id)
+        if req is None:
+            return []
+        values = sorted(req.values, key=lambda v: v.field_id)
+        return [(v.field.label, v.value_text) for v in values]
 
     async def create_request(
         self,
@@ -165,10 +213,21 @@ class BotService:
         и уведомить менеджеров объекта.
 
         values — {field_id: value_text} по схеме полей категории объекта.
+        Вставка выполняется (flush) до публикации события: ошибка БД не
+        приводит к уведомлению о несуществующей заявке.
         """
         obj = await self.get_object(object_id)
         if obj is None:
             raise BotServiceError("Объект не найден")
+        too_long = [
+            field_id
+            for field_id, value in values.items()
+            if value is not None and len(value) > VALUE_TEXT_MAX_LENGTH
+        ]
+        if too_long:
+            raise BotServiceError(
+                f"Слишком длинное значение поля (максимум {VALUE_TEXT_MAX_LENGTH} символов)."
+            )
         req = Request(
             visitor_id=visitor.id,
             object_id=object_id,
@@ -179,8 +238,12 @@ class BotService:
         # динамические поля заявки (одна транзакция с заявкой)
         if values:
             await self.request_fields.add_values(req.id, values)
+        await self.session.flush()
         # менеджеры объекта напрямую + менеджеры категории объекта
         manager_ids = await self.objects.list_access_manager_ids(object_id)
+        # фиксация до публикации: консьюмер не получит событие о заявке,
+        # которой нет в БД
+        await self.session.commit()
         await self.publisher.publish_request_created(
             RequestCreatedEvent(
                 request_id=req.id,
@@ -194,19 +257,25 @@ class BotService:
 
     async def list_visitor_requests(
         self, visitor_id: int, page: int
-    ) -> tuple[list[Request], int]:
-        """Страница заявок посетителя."""
+    ) -> tuple[list[Request], int, int]:
+        """Страница заявок посетителя: (элементы, всего страниц, номер страницы)."""
         page_size = await self.app_settings.get_page_size()
+        total = await self.requests.count(Request.visitor_id == visitor_id)
+        pages = _pages(total, page_size)
+        page = _clamp_page(page, pages)
         items = await self.requests.list_by_visitor(
             visitor_id, limit=page_size, offset=page * page_size
         )
-        total = await self.requests.count(Request.visitor_id == visitor_id)
-        pages = max(1, -(-total // page_size))
-        return list(items), pages
+        return list(items), pages, page
 
-    async def get_request(self, request_id: int, visitor_id: int) -> Request | None:
-        """Заявка посетителя (только своя)."""
-        req = await self.requests.get(request_id)
+    async def get_request(
+        self, request_id: int, visitor_id: int, *, for_update: bool = False
+    ) -> Request | None:
+        """Заявка посетителя (только своя); for_update — с блокировкой строки."""
+        if for_update:
+            req = await self.requests.get_for_update(request_id)
+        else:
+            req = await self.requests.get(request_id)
         if req is None or req.visitor_id != visitor_id:
             return None
         return req
@@ -222,12 +291,18 @@ class BotService:
         return False
 
     async def cancel_request(self, req: Request) -> Request:
-        """Отменить заявку посетителя и уведомить менеджеров."""
+        """Отменить заявку посетителя и уведомить менеджеров.
+
+        req должна быть прочитана с блокировкой (get_request(for_update=True)):
+        переход проверяется по актуальному статусу, параллельная смена статуса
+        менеджером ждёт завершения транзакции.
+        """
         if not await self.can_cancel(req):
             raise BotServiceError("Заявку нельзя отменить")
         req.status = RequestStatus.CANCELLED_BY_CUSTOMER
         # менеджеры объекта напрямую + менеджеры категории объекта
         manager_ids = await self.objects.list_access_manager_ids(req.object_id)
+        await self.session.commit()
         await self.publisher.publish_request_cancelled(
             RequestCancelledEvent(
                 request_id=req.id,

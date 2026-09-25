@@ -1,6 +1,7 @@
 """Хендлеры заявок: создание (динамический диалог), мои заявки, отмена."""
 
 from aiogram import F, Router
+from aiogram import html
 from aiogram.types import CallbackQuery
 from aiogram_dialog import DialogManager, StartMode
 from dishka.integrations.aiogram import FromDishka
@@ -51,6 +52,8 @@ async def start_request(
             "answers": {},
         },
     )
+    # снять индикатор загрузки с кнопки
+    await callback.answer()
 
 
 # -- мои заявки --------------------------------------------------------------
@@ -63,10 +66,10 @@ async def show_my_requests(
     bot_service: FromDishka[BotService],
 ) -> None:
     """Список заявок посетителя (с пагинацией)."""
-    if not await ensure_visitor(callback, bot_service):
+    visitor = await ensure_visitor(callback, bot_service)
+    if visitor is None:
         return
-    visitor = await bot_service.get_visitor(callback.from_user.id)
-    items, pages = await bot_service.list_visitor_requests(
+    items, pages, page = await bot_service.list_visitor_requests(
         visitor.id, page=callback_data.page
     )
     if not items:
@@ -77,7 +80,7 @@ async def show_my_requests(
         return
     await callback.message.edit_text(  # type: ignore[union-attr]
         "Ваши заявки:",
-        reply_markup=my_requests_keyboard(items, callback_data.page, pages),
+        reply_markup=my_requests_keyboard(items, page, pages),
     )
     await callback.answer()
 
@@ -89,10 +92,13 @@ async def cancel_request(
     bot_service: FromDishka[BotService],
 ) -> None:
     """Отмена заявки (new — всегда, approved — в пределах интервала)."""
-    if not await ensure_visitor(callback, bot_service):
+    visitor = await ensure_visitor(callback, bot_service)
+    if visitor is None:
         return
-    visitor = await bot_service.get_visitor(callback.from_user.id)
-    req = await bot_service.get_request(callback_data.request_id, visitor.id)  # type: ignore[arg-type]
+    # блокировка строки: параллельная смена статуса менеджером не перезаписывается
+    req = await bot_service.get_request(
+        callback_data.request_id, visitor.id, for_update=True  # type: ignore[arg-type]
+    )
     if req is None:
         await callback.answer("Заявка не найдена", show_alert=True)
         return
@@ -115,9 +121,9 @@ async def show_request_details(
     bot_service: FromDishka[BotService],
 ) -> None:
     """Карточка заявки: статус, телефон, значения полей, кнопка отмены."""
-    if not await ensure_visitor(callback, bot_service):
+    visitor = await ensure_visitor(callback, bot_service)
+    if visitor is None:
         return
-    visitor = await bot_service.get_visitor(callback.from_user.id)
     req = await bot_service.get_request(callback_data.request_id, visitor.id)  # type: ignore[arg-type]
     if req is None:
         await callback.answer("Заявка не найдена", show_alert=True)
@@ -126,11 +132,12 @@ async def show_request_details(
     text = (
         f"Заявка #{req.id}\n"
         f"Статус: {STATUS_TEXT.get(status, status)}\n"
-        f"Телефон: {req.phone}"
+        f"Телефон: {html.quote(req.phone)}"
     )
-    # значения динамических полей заявки (label: value)
+    # значения динамических полей заявки (label: value); parse_mode=HTML —
+    # пользовательский ввод экранируется
     for label, value in await bot_service.get_request_values(req.id):
-        text += f"\n{label}: {value if value else '—'}"
+        text += f"\n{html.quote(label)}: {html.quote(value) if value else '—'}"
     can_cancel = await bot_service.can_cancel(req)
     await callback.message.edit_text(  # type: ignore[union-attr]
         text, reply_markup=request_details_keyboard(req.id, can_cancel)

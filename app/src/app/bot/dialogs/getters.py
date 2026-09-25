@@ -13,9 +13,8 @@
 
 from aiogram_dialog import DialogManager
 
-from app.bot.dialogs.time_items import generate_hours, generate_minutes
+from app.bot.dialogs.time_items import MINUTES_STEP, generate_hours, generate_minutes
 from app.bot.services import BotService
-from app.domain.models import RequestFieldType
 
 
 async def get_bot_service(manager: DialogManager) -> BotService:
@@ -40,92 +39,87 @@ async def profile_getter(dialog_manager: DialogManager, **kwargs) -> dict:
     return {"profile_phone": profile_phone, "phone_text": phone_text}
 
 
-def hours_getter_factory(step: int = 5):
-    """Асинхронный геттер списка часов/минут для окон выбора времени.
-
-    Геттеры aiogram-dialog обязаны быть корутинами (фреймворк делает await).
-    """
-
-    async def time_items_getter(**kwargs) -> dict:
-        return {
-            "hours": generate_hours(),
-            "minutes": generate_minutes(step),
-        }
-
-    return time_items_getter
+# -- контекст динамического конструктора заявки (общий для диалога) ---------
 
 
-# -- геттеры динамического конструктора заявки ------------------------------
-
-
-def _schema(manager: DialogManager) -> list[dict]:
+def schema_of(manager: DialogManager) -> list[dict]:
     """Массив полей схемы заявки из start_data."""
     return manager.start_data.get("schema", [])
 
 
-def _current_step(manager: DialogManager) -> int:
+def current_step(manager: DialogManager) -> int:
     """Индекс текущего поля схемы."""
     return int(manager.dialog_data.get("current_step", 0))
 
 
-def _current_field(manager: DialogManager) -> dict | None:
+def current_field(manager: DialogManager) -> dict | None:
     """Поле схемы по current_step (или None — схема закончилась)."""
-    schema = _schema(manager)
-    step = _current_step(manager)
+    schema = schema_of(manager)
+    step = current_step(manager)
     if 0 <= step < len(schema):
         return schema[step]
     return None
 
 
-async def field_getter(dialog_manager: DialogManager, **kwargs) -> dict:
-    """Данные текущего поля: label, is_required, meta_data, тип."""
-    field = _current_field(dialog_manager)
+def field_options(field: dict | None) -> list[str]:
+    """Опции SELECT-поля из meta_data."""
     if field is None:
-        return {
-            "field": None,
-            "field_label": "",
-            "is_required": False,
-            "not_required": True,
-            "skip_hint": "",
-            "meta_data": {},
-            "is_time": False,
-        }
+        return []
+    return [str(o) for o in (field.get("meta_data") or {}).get("options", [])]
+
+
+def field_minute_step(field: dict | None) -> int:
+    """Шаг минут TIME-поля из meta_data (по умолчанию MINUTES_STEP)."""
+    if field is None:
+        return MINUTES_STEP
+    try:
+        return int((field.get("meta_data") or {}).get("minute_step", MINUTES_STEP))
+    except (TypeError, ValueError):
+        return MINUTES_STEP
+
+
+# -- геттеры окон --------------------------------------------------------------
+
+
+async def field_getter(dialog_manager: DialogManager, **kwargs) -> dict:
+    """Данные текущего поля: подпись, признак необязательности, подсказка."""
+    field = current_field(dialog_manager)
+    if field is None:
+        return {"field_label": "", "not_required": True, "skip_hint": ""}
     required = bool(field["is_required"])
     label = field["label"] + (" (обязательно)" if required else "")
     return {
-        "field": field,
         "field_label": label,
-        "is_required": required,
         "not_required": not required,
         # подсказка про «-» только для необязательных полей
         "skip_hint": "" if required else " (или «-» чтобы пропустить)",
-        "meta_data": field.get("meta_data") or {},
-        "is_time": field["type"] == RequestFieldType.TIME.value,
     }
 
 
+async def hours_getter(dialog_manager: DialogManager, **kwargs) -> dict:
+    """Часы 00–23 для окна выбора часа."""
+    return {"hours": generate_hours()}
+
+
 async def minutes_getter(dialog_manager: DialogManager, **kwargs) -> dict:
-    """Минуты с шагом из meta_data текущего TIME-поля (default 5)."""
-    field = _current_field(dialog_manager)
-    step = 5
-    if field is not None:
-        step = int((field.get("meta_data") or {}).get("minute_step", 5))
+    """Минуты с шагом из meta_data текущего TIME-поля."""
+    step = field_minute_step(current_field(dialog_manager))
     return {"minutes": generate_minutes(step)}
 
 
 async def select_options_getter(dialog_manager: DialogManager, **kwargs) -> dict:
-    """Опции SELECT-поля из meta_data (список (label, value))."""
-    field = _current_field(dialog_manager)
-    options = []
-    if field is not None:
-        raw = (field.get("meta_data") or {}).get("options", [])
-        options = [(str(o), str(o)) for o in raw]
-    return {"options": options}
+    """Опции SELECT-поля: (текст, индекс).
+
+    В callback_data передаётся индекс опции, а не её текст: лимит
+    callback_data — 64 байта, кириллический текст опции его превышает.
+    """
+    options = field_options(current_field(dialog_manager))
+    return {"options": [(text, str(index)) for index, text in enumerate(options)]}
 
 
 async def summary_getter(dialog_manager: DialogManager, **kwargs) -> dict:
     """Сводка: список «label: value» по всем полям схемы + телефон."""
-    schema = _schema(dialog_manager)
+    schema = schema_of(dialog_manager)
     answers: dict[int, str | None] = manager_start_answers(dialog_manager)
     lines = []
     for f in schema:

@@ -9,21 +9,9 @@ const fmt = new Intl.DateTimeFormat('ru-RU', {
   minute: '2-digit',
 })
 
-const fmtDate = new Intl.DateTimeFormat('ru-RU', {
-  timeZone: 'Europe/Moscow',
-  day: '2-digit',
-  month: '2-digit',
-  year: 'numeric',
-})
-
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) return '—'
   return fmt.format(new Date(iso))
-}
-
-export function formatDate(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  return fmtDate.format(new Date(iso))
 }
 
 /** ISO-дата (UTC) из значения input[type=datetime-local] (Europe/Moscow) */

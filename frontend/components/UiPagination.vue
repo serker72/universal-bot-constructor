@@ -1,8 +1,9 @@
 <template>
-  <div v-if="totalPages > 1" class="mt-4 flex items-center justify-between text-sm">
+  <!-- показывается и когда offset вне диапазона (страница опустела после удаления) -->
+  <div v-if="totalPages > 1 || offset > 0" class="mt-4 flex items-center justify-between text-sm">
     <span class="text-gray-500">Всего: <span class="font-medium text-gray-700">{{ total }}</span></span>
     <div class="flex items-center gap-1.5">
-      <button class="btn-ghost !px-2.5" :disabled="offset === 0" @click="$emit('change', offset - limit)">
+      <button class="btn-ghost !px-2.5" :disabled="offset === 0" @click="$emit('change', Math.max(0, offset - limit))">
         <AppIcon name="back" size="sm" />
       </button>
       <span class="rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-medium text-gray-600">

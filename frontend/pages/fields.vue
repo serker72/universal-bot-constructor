@@ -121,7 +121,7 @@ const TYPE_LABELS: Record<string, string> = {
   select: 'Выбор из вариантов',
 }
 
-const { api, page } = useApi()
+const { api, pageAll } = useApi()
 
 const items = ref<Field[]>([])
 const modal = ref(false)
@@ -136,10 +136,11 @@ const form = ref({
 })
 // параметры по типу (meta_data)
 const optionsText = ref('')
-const minuteStep = ref(5)
-const numMin = ref<number | null>(null)
-const numMax = ref<number | null>(null)
-const maxLength = ref(1000)
+// v-model.number: при очистке поля значение — "" (см. isNumber)
+const minuteStep = ref<number | ''>(5)
+const numMin = ref<number | '' | null>(null)
+const numMax = ref<number | '' | null>(null)
+const maxLength = ref<number | ''>(1000)
 
 function metaText(f: Field): string {
   if (!f.meta_data) return '—'
@@ -162,19 +163,43 @@ function buildMeta(): Record<string, unknown> | null {
     if (!options.length) return null
     meta.options = options
   } else if (form.value.type === 'time') {
-    meta.minute_step = minuteStep.value
+    if (isNumber(minuteStep.value)) meta.minute_step = minuteStep.value
   } else if (form.value.type === 'number') {
-    if (numMin.value !== null) meta.min = numMin.value
-    if (numMax.value !== null) meta.max = numMax.value
+    if (isNumber(numMin.value)) meta.min = numMin.value
+    if (isNumber(numMax.value)) meta.max = numMax.value
   } else if (form.value.type === 'text') {
-    meta.max_length = maxLength.value
+    if (isNumber(maxLength.value)) meta.max_length = maxLength.value
   }
   return Object.keys(meta).length ? meta : null
 }
 
+/** Число из v-model.number: очищенное поле даёт "" (или NaN) — это не число */
+function isNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
+/** Проверка параметров до отправки (backend проверяет то же самое) */
+function metaError(): string {
+  if (form.value.type === 'time') {
+    const step = minuteStep.value
+    if (!isNumber(step) || !Number.isInteger(step) || step < 1 || step > 30 || 60 % step !== 0) {
+      return 'Шаг минут — делитель 60: 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30'
+    }
+  } else if (form.value.type === 'number') {
+    if (isNumber(numMin.value) && isNumber(numMax.value) && numMin.value > numMax.value) {
+      return 'Минимум не может быть больше максимума'
+    }
+  } else if (form.value.type === 'text') {
+    const len = maxLength.value
+    if (isNumber(len) && (!Number.isInteger(len) || len < 1 || len > 1000)) {
+      return 'Максимальная длина — целое число 1..1000'
+    }
+  }
+  return ''
+}
+
 async function load() {
-  const p = await page<Field>('/request-fields', { limit: 1000 })
-  items.value = p.items
+  items.value = await pageAll<Field>('/request-fields')
 }
 
 function openCreate() {
@@ -206,6 +231,12 @@ async function save() {
     saving.value = false
     return
   }
+  const invalid = metaError()
+  if (invalid) {
+    formError.value = invalid
+    saving.value = false
+    return
+  }
   try {
     const body = {
       code: form.value.code,
@@ -223,7 +254,7 @@ async function save() {
     await load()
   } catch (err) {
     console.warn('[fields] save failed', err)
-    formError.value = 'Не удалось сохранить поле (код занят?)'
+    formError.value = apiErrorMessage(err, 'Не удалось сохранить поле')
   } finally {
     saving.value = false
   }
@@ -236,9 +267,9 @@ async function remove(f: Field) {
     await load()
   } catch (err) {
     console.warn('[fields] delete failed', err)
-    alert('Не удалось удалить поле (оно используется в заявках?)')
+    alert(apiErrorMessage(err, 'Не удалось удалить поле'))
   }
 }
 
-await load()
+await load().catch((err) => showLoadError(err, '[fields]'))
 </script>

@@ -79,32 +79,25 @@ interface User {
   username: string
 }
 
-const { api, page } = useApi()
+const { api, page, pageAll } = useApi()
 
-const items = ref<Session[]>([])
 const users = ref<User[]>([])
-const total = ref(0)
 const limit = PAGE_SIZE
-const offset = ref(0)
 const userId = ref('')
 const onlyActive = ref(false)
+const { items, total, offset, load, changeOffset: goTo } = useListLoader<Session>((off, signal) => {
+  const params: Record<string, unknown> = { limit, offset: off }
+  if (userId.value) params.user_id = userId.value
+  if (onlyActive.value) params.only_active = true
+  return page<Session>('/sessions', params, signal)
+}, limit)
 
 function userName(id: number): string {
   return users.value.find((u) => u.id === id)?.username ?? `#${id}`
 }
 
-async function load() {
-  const params: Record<string, unknown> = { limit, offset: offset.value }
-  if (userId.value) params.user_id = userId.value
-  if (onlyActive.value) params.only_active = true
-  const p = await page<Session>('/sessions', params)
-  items.value = p.items
-  total.value = p.total
-}
-
 function changeOffset(v: number) {
-  offset.value = v
-  load()
+  goTo(v, '[sessions]')
 }
 
 async function revoke(s: Session) {
@@ -113,7 +106,7 @@ async function revoke(s: Session) {
     await api(`/sessions/${s.id}/revoke`, { method: 'POST' })
     await load()
   } catch (err) {
-    alert('Не удалось отозвать сессию')
+    alert(apiErrorMessage(err, 'Не удалось отозвать сессию'))
   }
 }
 
@@ -123,15 +116,14 @@ async function revokeAll() {
     await api(`/sessions/users/${userId.value}/revoke-all`, { method: 'POST' })
     await load()
   } catch (err) {
-    alert('Не удалось отозвать сессии')
+    alert(apiErrorMessage(err, 'Не удалось отозвать сессии'))
   }
 }
 
 onMounted(async () => {
-  await load()
+  await load().catch((err) => showLoadError(err, '[sessions]'))
   try {
-    const p = await page<User>('/users', { limit: 1000 })
-    users.value = p.items
+    users.value = await pageAll<User>('/users')
   } catch (err) {
     console.warn('[sessions] users load failed', err)
   }

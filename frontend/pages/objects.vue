@@ -102,10 +102,11 @@
           </label>
           <input
             id="form-pdf"
+            ref="pdfInput"
             type="file"
             accept="application/pdf,.pdf"
             class="input"
-            @change="pdfFile = $event.target.files?.[0] ?? null"
+            @change="pdfFile = ($event.target as HTMLInputElement).files?.[0] ?? null"
           />
           <p v-if="form.id && form.has_pdf && !pdfFile" class="mt-1 text-xs text-green-600">
             PDF загружен. Можно заменить, выбрав новый файл.
@@ -143,7 +144,8 @@
 
     <!-- Назначение менеджеров -->
     <UiModal :open="managersModal" title="Менеджеры объекта" @close="managersModal = false">
-      <p v-if="!managers.length" class="mb-3 text-sm text-gray-500">
+      <p v-if="managersLoading" class="mb-3 text-sm text-gray-500">Загрузка…</p>
+      <p v-else-if="!managers.length" class="mb-3 text-sm text-gray-500">
         Нет активных пользователей с ролью «менеджер».
       </p>
       <div class="mb-4 max-h-64 space-y-2 overflow-y-auto">
@@ -155,7 +157,12 @@
       <p v-if="managersError" class="mb-2 text-sm text-red-600">{{ managersError }}</p>
       <div class="flex justify-end gap-2">
         <button class="btn-secondary" type="button" @click="managersModal = false">Отмена</button>
-        <button class="btn-primary" type="button" :disabled="managersSaving" @click="saveManagers">
+        <button
+          class="btn-primary"
+          type="button"
+          :disabled="managersSaving || managersLoading || !managersLoaded"
+          @click="saveManagers"
+        >
           Сохранить
         </button>
       </div>
@@ -179,7 +186,7 @@ interface Obj {
 }
 // тип менеджера приходит из composable useManagers
 
-const { api, page, baseURL } = useApi()
+const { api, page, pageAll, baseURL } = useApi()
 const { managers, loadManagers } = useManagers()
 const auth = useAuth()
 const isAdmin = auth.isAdmin
@@ -187,11 +194,14 @@ const route = useRoute()
 const router = useRouter()
 
 const categories = ref<Category[]>([])
-const items = ref<Obj[]>([])
-const total = ref(0)
 const limit = PAGE_SIZE
-const offset = ref(0)
 const filterCategory = ref<number | null>(null)
+const { items, total, offset, load, changeOffset: goTo } = useListLoader<Obj>((off, signal) => {
+  const params: Record<string, unknown> = { limit, offset: off }
+  if (filterCategory.value !== null) params.category_id = filterCategory.value
+  return page<Obj>('/objects', params, signal)
+}, limit)
+const pdfInput = ref<HTMLInputElement | null>(null)
 
 const modal = ref(false)
 const readOnly = ref(false)
@@ -206,22 +216,21 @@ const selectedManagers = ref<number[]>([])
 const managersSaving = ref(false)
 const managersError = ref('')
 const managersObjectId = ref(0)
+const managersLoading = ref(false)
+const managersLoaded = ref(false)
 
 function categoryName(id: number): string {
   return categories.value.find((c) => c.id === id)?.name ?? `#${id}`
 }
 
-async function load() {
-  const params: Record<string, unknown> = { limit, offset: offset.value }
-  if (filterCategory.value !== null) params.category_id = filterCategory.value
-  const p = await page<Obj>('/objects', params)
-  items.value = p.items
-  total.value = p.total
+function changeOffset(v: number) {
+  goTo(v, '[objects]')
 }
 
-function changeOffset(v: number) {
-  offset.value = v
-  load()
+/** Сброс выбранного PDF (и значения file input — иначе тот же файл не выбрать повторно) */
+function resetPdfInput() {
+  pdfFile.value = null
+  if (pdfInput.value) pdfInput.value.value = ''
 }
 
 function openCreate() {
@@ -235,7 +244,7 @@ function openCreate() {
     has_pdf: false,
   }
   readOnly.value = false
-  pdfFile.value = null
+  resetPdfInput()
   formError.value = ''
   modal.value = true
 }
@@ -243,7 +252,7 @@ function openCreate() {
 function openEdit(obj: Obj) {
   form.value = { ...obj }
   readOnly.value = false
-  pdfFile.value = null
+  resetPdfInput()
   formError.value = ''
   modal.value = true
 }
@@ -252,7 +261,7 @@ function openEdit(obj: Obj) {
 function openView(obj: Obj) {
   form.value = { ...obj }
   readOnly.value = true
-  pdfFile.value = null
+  resetPdfInput()
   formError.value = ''
   modal.value = true
 }
@@ -268,24 +277,31 @@ async function save() {
       sort_order: form.value.sort_order,
       is_active: form.value.is_active,
     }
-    let object_id = form.value.id
-    if (object_id) {
-      await api(`/objects/${object_id}`, { method: 'PATCH', body })
+    if (form.value.id) {
+      await api(`/objects/${form.value.id}`, { method: 'PATCH', body })
     } else {
       const created = await api<Obj>('/objects', { method: 'POST', body })
-      object_id = created.id
+      // id — в форму сразу: повторное «Сохранить» после ошибки загрузки PDF
+      // делает PATCH, а не второй POST (дубликат объекта)
+      form.value.id = created.id
     }
     // выбранный PDF загружаем сразу после сохранения (в т.ч. при создании)
-    if (pdfFile.value && object_id) {
+    if (pdfFile.value && form.value.id) {
       const fd = new FormData()
       fd.append('file', pdfFile.value)
-      await api(`/objects/${object_id}/pdf`, { method: 'PUT', body: fd })
+      await api(`/objects/${form.value.id}/pdf`, { method: 'PUT', body: fd })
+      resetPdfInput()
     }
     modal.value = false
     await load()
   } catch (err) {
     console.warn('[objects] save failed', err)
-    formError.value = 'Не удалось сохранить объект (проверьте PDF: только PDF, до 20 МБ)'
+    formError.value = apiErrorMessage(
+      err,
+      'Не удалось сохранить объект (проверьте PDF: только PDF, до 20 МБ)',
+    )
+    // объект мог быть создан до ошибки PDF — обновить список
+    load().catch(() => {})
   } finally {
     saving.value = false
   }
@@ -299,12 +315,12 @@ async function uploadPdf() {
     const fd = new FormData()
     fd.append('file', pdfFile.value)
     await api(`/objects/${form.value.id}/pdf`, { method: 'PUT', body: fd })
-    pdfFile.value = null
+    resetPdfInput()
     await load()
     modal.value = false
   } catch (err) {
     console.warn('[objects] pdf upload failed', err)
-    formError.value = 'Не удалось загрузить PDF (только PDF, до 20 МБ)'
+    formError.value = apiErrorMessage(err, 'Не удалось загрузить PDF (только PDF, до 20 МБ)')
   } finally {
     uploading.value = false
   }
@@ -316,15 +332,28 @@ function openPdf(obj: Obj) {
 }
 
 async function openManagers(obj: Obj) {
+  // сброс состояния предыдущей сущности: до загрузки «Сохранить» недоступна,
+  // иначе PUT перезаписал бы доступы новой сущности списком предыдущей
   managersObjectId.value = obj.id
+  selectedManagers.value = []
+  managersLoaded.value = false
+  managersLoading.value = true
   managersError.value = ''
   managersModal.value = true
   try {
-    const out = await api<{ object_id: number; user_ids: number[] }>(`/objects/${obj.id}/managers`)
+    const [out] = await Promise.all([
+      api<{ object_id: number; user_ids: number[] }>(`/objects/${obj.id}/managers`),
+      loadManagers(true),
+    ])
+    // модалку за это время могли открыть для другого объекта
+    if (managersObjectId.value !== obj.id) return
     selectedManagers.value = [...out.user_ids]
+    managersLoaded.value = true
   } catch (err) {
     console.warn('[objects] managers load failed', err)
-    managersError.value = 'Не удалось загрузить менеджеров'
+    managersError.value = apiErrorMessage(err, 'Не удалось загрузить менеджеров')
+  } finally {
+    if (managersObjectId.value === obj.id) managersLoading.value = false
   }
 }
 
@@ -339,7 +368,7 @@ async function saveManagers() {
     managersModal.value = false
   } catch (err) {
     console.warn('[objects] managers save failed', err)
-    managersError.value = 'Не удалось сохранить менеджеров'
+    managersError.value = apiErrorMessage(err, 'Не удалось сохранить менеджеров')
   } finally {
     managersSaving.value = false
   }
@@ -352,7 +381,7 @@ async function remove(obj: Obj) {
     await load()
   } catch (err) {
     console.warn('[objects] delete failed', err)
-    alert('Не удалось удалить объект')
+    alert(apiErrorMessage(err, 'Не удалось удалить объект'))
   }
 }
 
@@ -377,14 +406,16 @@ async function openFromQuery() {
 
 onMounted(async () => {
   try {
-    const p = await page<Category>('/categories', { limit: 1000 })
-    categories.value = p.items
+    categories.value = await pageAll<Category>('/categories')
   } catch (err) {
     // категории нужны для фильтра/формы
     console.warn('[objects] failed to load categories', err)
   }
-  await load()
-  if (isAdmin.value) await loadManagers()
+  try {
+    await load()
+  } catch (err) {
+    showLoadError(err, '[objects]')
+  }
   await openFromQuery()
 })
 </script>

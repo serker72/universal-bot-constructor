@@ -19,12 +19,15 @@
             <div class="text-sm font-medium text-gray-500">{{ card.label }}</div>
             <div class="mt-2 text-3xl font-semibold tracking-tight text-gray-900">
               <template v-if="card.countNew !== undefined">
-                <NuxtLink
-                  :to="{ path: '/requests', query: { status: 'new' } }"
-                  class="hover:underline"
-                  :class="{ 'text-amber-600': card.countNew > 0 }"
-                  @click.stop
-                >{{ card.countNew ?? '—' }}</NuxtLink>
+                <!-- не вложенный NuxtLink (<a> внутри <a> — невалидная разметка) -->
+                <span
+                  role="link"
+                  tabindex="0"
+                  class="cursor-pointer hover:underline"
+                  :class="{ 'text-amber-600': (card.countNew ?? 0) > 0 }"
+                  @click.stop.prevent="openNewRequests"
+                  @keydown.enter.stop.prevent="openNewRequests"
+                >{{ card.countNew ?? '—' }}</span>
                 <span class="mx-1 text-xl text-gray-400">/</span>
                 <span>{{ card.count ?? '—' }}</span>
               </template>
@@ -55,6 +58,11 @@
 <script setup lang="ts">
 const auth = useAuth()
 const { page } = useApi()
+const router = useRouter()
+
+function openNewRequests() {
+  router.push({ path: '/requests', query: { status: 'new' } })
+}
 
 const counts = ref({
   categories: null as number | null,

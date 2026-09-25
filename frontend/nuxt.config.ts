@@ -18,8 +18,10 @@ export default defineNuxtConfig({
 
   runtimeConfig: {
     public: {
-      // База API backend (в prod проксируется nginx'ом, см. docker-compose.frontend.yml)
-      backendUrl: process.env.NUXT_PUBLIC_BACKEND_URL || 'http://localhost:8000/api/v1',
+      // База API backend. По умолчанию — относительный путь (тот же origin за
+      // nginx); для npm run dev без nginx задать NUXT_PUBLIC_BACKEND_URL,
+      // например http://localhost:8000/api/v1
+      backendUrl: process.env.NUXT_PUBLIC_BACKEND_URL || '/api/v1',
     },
   },
 
@@ -31,15 +33,9 @@ export default defineNuxtConfig({
         { charset: 'utf-8' },
         { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       ],
-      // Шрифт Inter
-      link: [
-        { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
-        { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossorigin: '' },
-        {
-          rel: 'stylesheet',
-          href: 'https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap',
-        },
-      ],
+      // Внешние шрифты (Google Fonts) не подключаются: лишняя внешняя
+      // зависимость и утечка IP администраторов третьей стороне (CSP: font-src 'self').
+      // Inter используется, если установлен локально, иначе — системный sans-serif.
     },
   },
 })

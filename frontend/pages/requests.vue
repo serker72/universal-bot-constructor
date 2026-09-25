@@ -78,13 +78,13 @@
             <td class="whitespace-nowrap">{{ formatDateTime(req.created_at) }}</td>
             <td class="space-x-2 whitespace-nowrap">
               <template v-if="canProcess(req)">
-                <button v-if="req.status === 'new'" class="btn-primary" @click="setStatus(req, 'approved')">
+                <button v-if="req.status === 'new'" class="btn-primary" :disabled="busyId === req.id" @click="setStatus(req, 'approved')">
                   Подтвердить
                 </button>
-                <button v-if="req.status === 'new'" class="btn-danger" @click="setStatus(req, 'rejected')">
+                <button v-if="req.status === 'new'" class="btn-danger" :disabled="busyId === req.id" @click="setStatus(req, 'rejected')">
                   Отклонить
                 </button>
-                <button v-if="req.status === 'approved'" class="btn-primary" @click="setStatus(req, 'completed')">
+                <button v-if="req.status === 'approved'" class="btn-primary" :disabled="busyId === req.id" @click="setStatus(req, 'completed')">
                   Выполнена
                 </button>
               </template>
@@ -128,14 +128,30 @@ interface Obj {
 
 const auth = useAuth()
 const route = useRoute()
-const { api, page } = useApi()
+const { api, page, pageAll } = useApi()
 
-const items = ref<Req[]>([])
 const objects = ref<Obj[]>([])
-const total = ref(0)
 const limit = PAGE_SIZE
-const offset = ref(0)
 const filters = ref({ status: '', objectId: '', dateFrom: '', dateTo: '' })
+// id заявки, статус которой меняется (кнопки заблокированы)
+const busyId = ref<number | null>(null)
+
+/** Следующий календарный день (YYYY-MM-DD) для исключающей границы «по» */
+function nextDay(value: string): string {
+  const d = new Date(`${value}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
+}
+
+const { items, total, offset, load, changeOffset: goTo } = useListLoader<Req>((off, signal) => {
+  const params: Record<string, unknown> = { limit, offset: off }
+  if (filters.value.status) params.status_filter = filters.value.status
+  if (filters.value.objectId) params.object_id = filters.value.objectId
+  // границы дня по Москве; «по» — исключающая: < 00:00 следующего дня
+  if (filters.value.dateFrom) params.date_from = moscowToUtc(`${filters.value.dateFrom}T00:00`)
+  if (filters.value.dateTo) params.date_to = moscowToUtc(`${nextDay(filters.value.dateTo)}T00:00`)
+  return page<Req>('/requests', params, signal)
+}, limit)
 
 function objectName(id: number): string {
   return objects.value.find((o) => o.id === id)?.name ?? `#${id}`
@@ -149,20 +165,8 @@ function canProcess(req: Req): boolean {
   return false
 }
 
-async function load() {
-  const params: Record<string, unknown> = { limit, offset: offset.value }
-  if (filters.value.status) params.status_filter = filters.value.status
-  if (filters.value.objectId) params.object_id = filters.value.objectId
-  if (filters.value.dateFrom) params.date_from = `${filters.value.dateFrom}T00:00:00+03:00`
-  if (filters.value.dateTo) params.date_to = `${filters.value.dateTo}T23:59:59+03:00`
-  const p = await page<Req>('/requests', params)
-  items.value = p.items
-  total.value = p.total
-}
-
 function changeOffset(v: number) {
-  offset.value = v
-  load()
+  goTo(v, '[requests]')
 }
 
 function resetFilters() {
@@ -173,11 +177,14 @@ function resetFilters() {
 async function setStatus(req: Req, status: string) {
   const verb = status === 'approved' ? 'подтвердить' : status === 'rejected' ? 'отклонить' : 'пометить выполненной'
   if (!confirm(`${verb.charAt(0).toUpperCase() + verb.slice(1)} заявку #${req.id}?`)) return
+  busyId.value = req.id
   try {
     await api(`/requests/${req.id}/status`, { method: 'POST', body: { status } })
     await load()
   } catch (err) {
-    alert('Не удалось изменить статус заявки')
+    alert(apiErrorMessage(err, 'Не удалось изменить статус заявки'))
+  } finally {
+    busyId.value = null
   }
 }
 
@@ -187,10 +194,9 @@ onMounted(async () => {
   if (typeof qs === 'string' && ['new', 'approved', 'rejected', 'completed', 'cancelled_by_customer'].includes(qs)) {
     filters.value.status = qs
   }
-  await load()
+  await load().catch((err) => showLoadError(err, '[requests]'))
   try {
-    const p = await page<Obj>('/objects', { limit: 1000 })
-    objects.value = p.items
+    objects.value = await pageAll<Obj>('/objects')
   } catch (err) {
     console.warn('[requests] objects load failed', err)
   }

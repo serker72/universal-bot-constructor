@@ -4,10 +4,12 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 
-COPY package.json ./
-COPY package-lock.json* ./
-RUN npm ci || npm install
+# lock-файл обязателен: npm ci ставит ровно зафиксированные версии и падает
+# при рассинхроне package.json/package-lock.json (без fallback на npm install)
+COPY package.json package-lock.json ./
+RUN npm ci
 
+# node_modules хоста исключены .dockerignore
 COPY . .
 RUN npm run build
 
@@ -15,7 +17,10 @@ FROM node:22-alpine
 WORKDIR /app
 
 ENV NODE_ENV=production
-COPY --from=build /app/.output ./.output
+COPY --from=build --chown=node:node /app/.output ./.output
+
+# непривилегированный пользователь образа node
+USER node
 
 EXPOSE 3000
 CMD ["node", ".output/server/index.mjs"]

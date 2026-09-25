@@ -1,0 +1,16 @@
+# Не копировать в контекст сборки артефакты хоста:
+# node_modules хоста (glibc) перезаписали бы musl-модули alpine после npm ci
+node_modules
+.nuxt
+.output
+.nitro
+.cache
+dist
+*.log
+.env
+.env.*
+.git
+.idea
+.vscode
+Dockerfile
+.dockerignore

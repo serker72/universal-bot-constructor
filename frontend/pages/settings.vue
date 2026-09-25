@@ -7,13 +7,13 @@
     <form v-else class="card space-y-5 p-6" @submit.prevent="save">
       <div>
         <label class="label" for="st-page">Размер страницы меню бота</label>
-        <input id="st-page" v-model="form.page_size" class="input" type="number" min="1" max="50" />
+        <input id="st-page" v-model="form.page_size" class="input" type="number" min="1" max="50" required />
       </div>
       <div>
         <label class="label" for="st-cancel">
           Интервал отмены подтверждённой заявки после подтверждения, минут
         </label>
-        <input id="st-cancel" v-model="form.cancel_minutes" class="input" type="number" min="0" />
+        <input id="st-cancel" v-model="form.cancel_minutes" class="input" type="number" min="0" max="525600" required />
         <p class="mt-1 space-y-0.5 text-xs text-gray-400">
           Сколько минут после подтверждения заявки менеджером предоставляется посетителю на её отмену.
           <br>60 — 1 час
@@ -98,7 +98,7 @@ async function save() {
   } catch (err) {
     console.warn('[settings] save failed', err)
     saved.value = false
-    message.value = 'Не удалось сохранить настройки'
+    message.value = apiErrorMessage(err, 'Не удалось сохранить настройки')
   } finally {
     saving.value = false
   }

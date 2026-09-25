@@ -57,37 +57,29 @@ interface User {
   username: string
 }
 
-const { page } = useApi()
+const { page, pageAll } = useApi()
 
-const items = ref<Device[]>([])
 const users = ref<User[]>([])
-const total = ref(0)
 const limit = PAGE_SIZE
-const offset = ref(0)
 const userId = ref('')
+const { items, total, offset, load, changeOffset: goTo } = useListLoader<Device>((off, signal) => {
+  const params: Record<string, unknown> = { limit, offset: off }
+  if (userId.value) params.user_id = userId.value
+  return page<Device>('/devices', params, signal)
+}, limit)
 
 function userName(id: number): string {
   return users.value.find((u) => u.id === id)?.username ?? `#${id}`
 }
 
-async function load() {
-  const params: Record<string, unknown> = { limit, offset: offset.value }
-  if (userId.value) params.user_id = userId.value
-  const p = await page<Device>('/devices', params)
-  items.value = p.items
-  total.value = p.total
-}
-
 function changeOffset(v: number) {
-  offset.value = v
-  load()
+  goTo(v, '[devices]')
 }
 
 onMounted(async () => {
-  await load()
+  await load().catch((err) => showLoadError(err, '[devices]'))
   try {
-    const p = await page<User>('/users', { limit: 1000 })
-    users.value = p.items
+    users.value = await pageAll<User>('/users')
   } catch (err) {
     console.warn('[devices] users load failed', err)
   }

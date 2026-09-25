@@ -13,10 +13,15 @@
           enter-from-class="opacity-0 translate-y-2 scale-95"
           appear-active-class=""
         >
-          <div class="w-full max-w-lg rounded-2xl bg-white shadow-2xl">
+          <div
+            class="w-full max-w-lg rounded-2xl bg-white shadow-2xl"
+            role="dialog"
+            aria-modal="true"
+            :aria-labelledby="titleId"
+          >
             <div class="flex items-center justify-between border-b border-gray-100 px-5 py-4">
-              <h2 class="text-base font-semibold text-gray-900">{{ title }}</h2>
-              <button class="btn-ghost -mr-1.5 rounded-lg p-1.5" @click="$emit('close')">
+              <h2 :id="titleId" class="text-base font-semibold text-gray-900">{{ title }}</h2>
+              <button class="btn-ghost -mr-1.5 rounded-lg p-1.5" type="button" aria-label="Закрыть" @click="$emit('close')">
                 <AppIcon name="x" size="sm" />
               </button>
             </div>
@@ -31,6 +36,15 @@
 </template>
 
 <script setup lang="ts">
-defineProps<{ open: boolean; title: string }>()
-defineEmits<{ close: [] }>()
+const props = defineProps<{ open: boolean; title: string }>()
+const emit = defineEmits<{ close: [] }>()
+
+const titleId = useId()
+
+// Esc закрывает открытую модалку
+function onKeydown(e: KeyboardEvent) {
+  if (props.open && e.key === 'Escape') emit('close')
+}
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 </script>

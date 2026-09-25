@@ -23,6 +23,7 @@
           <tr>
             <th>ФИО</th>
             <th class="w-40">Telegram ID</th>
+            <th class="w-40">Телефон</th>
             <th class="w-28">Согласие</th>
             <th class="w-36">Статус</th>
             <th class="w-44">Зарегистрирован</th>
@@ -33,6 +34,7 @@
           <tr v-for="v in items" :key="v.id">
             <td class="font-medium">{{ v.full_name }}</td>
             <td>{{ v.telegram_id }}</td>
+            <td class="whitespace-nowrap">{{ v.phone || '—' }}</td>
             <td>{{ v.consent_given ? 'Да' : 'Нет' }}</td>
             <td>
               <span :class="v.is_blocked ? 'text-red-600' : 'text-green-600'">
@@ -41,12 +43,12 @@
             </td>
             <td class="whitespace-nowrap">{{ formatDateTime(v.created_at) }}</td>
             <td>
-              <button v-if="!v.is_blocked" class="btn-danger" @click="ban(v)">Заблокировать</button>
-              <button v-else class="btn-secondary" @click="unban(v)">Разблокировать</button>
+              <button v-if="!v.is_blocked" class="btn-danger" :disabled="busyId === v.id" @click="ban(v)">Заблокировать</button>
+              <button v-else class="btn-secondary" :disabled="busyId === v.id" @click="unban(v)">Разблокировать</button>
             </td>
           </tr>
           <tr v-if="!items.length">
-            <td colspan="6" class="py-6 text-center text-gray-400">Посетителей нет</td>
+            <td colspan="7" class="py-6 text-center text-gray-400">Посетителей нет</td>
           </tr>
         </tbody>
       </table>
@@ -62,6 +64,7 @@ interface Visitor {
   id: number
   telegram_id: number
   full_name: string
+  phone: string | null
   consent_given: boolean
   is_blocked: boolean
   created_at: string
@@ -69,53 +72,57 @@ interface Visitor {
 
 const { api, page } = useApi()
 
-const items = ref<Visitor[]>([])
-const total = ref(0)
 const limit = PAGE_SIZE
-const offset = ref(0)
 const search = ref('')
 const blockedFilter = ref('')
+// id посетителя, для которого выполняется бан/разбан (кнопка заблокирована)
+const busyId = ref<number | null>(null)
+
+const { items, total, offset, load, changeOffset: goTo } = useListLoader<Visitor>((off, signal) => {
+  const params: Record<string, unknown> = { limit, offset: off }
+  if (search.value.trim()) params.search = search.value.trim()
+  if (blockedFilter.value !== '') params.is_blocked = blockedFilter.value === 'true'
+  return page<Visitor>('/visitors', params, signal)
+}, limit)
 
 let timer: ReturnType<typeof setTimeout> | undefined
 function debouncedLoad() {
   clearTimeout(timer)
   timer = setTimeout(() => changeOffset(0), 400)
 }
-
-async function load() {
-  const params: Record<string, unknown> = { limit, offset: offset.value }
-  if (search.value.trim()) params.search = search.value.trim()
-  if (blockedFilter.value !== '') params.is_blocked = blockedFilter.value === 'true'
-  const p = await page<Visitor>('/visitors', params)
-  items.value = p.items
-  total.value = p.total
-}
+// таймер не должен сработать после ухода со страницы
+onBeforeUnmount(() => clearTimeout(timer))
 
 function changeOffset(v: number) {
-  offset.value = v
-  load()
+  goTo(v, '[visitors]')
 }
 
 async function ban(v: Visitor) {
   if (!confirm(`Заблокировать посетителя «${v.full_name}»?`)) return
+  busyId.value = v.id
   try {
     await api(`/visitors/${v.id}/ban`, { method: 'POST' })
     await load()
   } catch (err) {
     console.warn('[visitors] ban failed', err)
-    alert('Не удалось заблокировать посетителя')
+    alert(apiErrorMessage(err, 'Не удалось заблокировать посетителя'))
+  } finally {
+    busyId.value = null
   }
 }
 
 async function unban(v: Visitor) {
+  busyId.value = v.id
   try {
     await api(`/visitors/${v.id}/unban`, { method: 'POST' })
     await load()
   } catch (err) {
     console.warn('[visitors] unban failed', err)
-    alert('Не удалось разблокировать посетителя')
+    alert(apiErrorMessage(err, 'Не удалось разблокировать посетителя'))
+  } finally {
+    busyId.value = null
   }
 }
 
-await load()
+await load().catch((err) => showLoadError(err, '[visitors]'))
 </script>

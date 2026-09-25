@@ -55,7 +55,7 @@
           <label class="label" for="u-password">
             Пароль {{ isEdit ? '(оставьте пустым, чтобы не менять)' : '' }}
           </label>
-          <input id="u-password" v-model="form.password" class="input" type="password" :required="!isEdit" minlength="8" maxlength="128" autocomplete="new-password" />
+          <input id="u-password" v-model="form.password" class="input" type="password" :required="!isEdit" minlength="10" maxlength="72" autocomplete="new-password" />
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>
@@ -98,25 +98,19 @@ interface User {
 const auth = useAuth()
 const { api, page } = useApi()
 
-const items = ref<User[]>([])
-const total = ref(0)
 const limit = PAGE_SIZE
-const offset = ref(0)
+const { items, total, offset, load, changeOffset: goTo } = useListLoader<User>(
+  (off, signal) => page<User>('/users', { limit, offset: off }, signal),
+  limit,
+)
 const modal = ref(false)
 const isEdit = ref(false)
 const saving = ref(false)
 const formError = ref('')
 const form = ref({ id: 0, username: '', password: '', role: 'manager' as 'admin' | 'manager', telegramId: '', is_active: true })
 
-async function load() {
-  const p = await page<User>('/users', { limit, offset: offset.value })
-  items.value = p.items
-  total.value = p.total
-}
-
 function changeOffset(v: number) {
-  offset.value = v
-  load()
+  goTo(v, '[users]')
 }
 
 function openCreate() {
@@ -168,7 +162,7 @@ async function save() {
     await load()
   } catch (err) {
     console.warn('[users] save failed', err)
-    formError.value = 'Не удалось сохранить пользователя (имя занято? пароль от 8 символов?)'
+    formError.value = apiErrorMessage(err, 'Не удалось сохранить пользователя')
   } finally {
     saving.value = false
   }
@@ -181,9 +175,9 @@ async function remove(u: User) {
     await load()
   } catch (err) {
     console.warn('[users] delete failed', err)
-    alert('Не удалось удалить пользователя')
+    alert(apiErrorMessage(err, 'Не удалось удалить пользователя'))
   }
 }
 
-await load()
+await load().catch((err) => showLoadError(err, '[users]'))
 </script>

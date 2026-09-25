@@ -35,9 +35,6 @@ body {
 .label {
   @apply mb-1.5 block text-sm font-medium text-gray-700;
 }
-.checkbox {
-  @apply h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500;
-}
 
 /* ---------- Таблицы ---------- */
 .table-base {

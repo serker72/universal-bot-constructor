@@ -83,7 +83,8 @@
       <p class="mb-3 text-sm text-gray-500">
         Менеджеры категории получают доступ ко всем её объектам (заявки и уведомления).
       </p>
-      <p v-if="!managers.length" class="mb-3 text-sm text-gray-500">
+      <p v-if="managersLoading" class="mb-3 text-sm text-gray-500">Загрузка…</p>
+      <p v-else-if="!managers.length" class="mb-3 text-sm text-gray-500">
         Нет активных пользователей с ролью «менеджер».
       </p>
       <div class="mb-4 max-h-64 space-y-2 overflow-y-auto">
@@ -95,7 +96,12 @@
       <p v-if="managersError" class="mb-2 text-sm text-red-600">{{ managersError }}</p>
       <div class="flex justify-end gap-2">
         <button class="btn-secondary" type="button" @click="managersModal = false">Отмена</button>
-        <button class="btn-primary" type="button" :disabled="managersSaving" @click="saveManagers">
+        <button
+          class="btn-primary"
+          type="button"
+          :disabled="managersSaving || managersLoading || !managersLoaded"
+          @click="saveManagers"
+        >
           Сохранить
         </button>
       </div>
@@ -105,7 +111,8 @@
       <p class="mb-3 text-sm text-gray-500">
         Поля формы заявки для объектов этой категории (порядок = порядок в диалоге бота).
       </p>
-      <p v-if="!fieldsAll.length" class="mb-3 text-sm text-gray-500">
+      <p v-if="fieldsLoading" class="mb-3 text-sm text-gray-500">Загрузка…</p>
+      <p v-else-if="!fieldsAll.length" class="mb-3 text-sm text-gray-500">
         Справочник полей пуст — добавьте поля на странице «Поля заявки».
       </p>
       <div class="mb-4 max-h-80 space-y-2 overflow-y-auto">
@@ -138,7 +145,12 @@
       <p v-if="fieldsError" class="mb-2 text-sm text-red-600">{{ fieldsError }}</p>
       <div class="flex justify-end gap-2">
         <button class="btn-secondary" type="button" @click="fieldsModal = false">Отмена</button>
-        <button class="btn-primary" type="button" :disabled="fieldsSaving" @click="saveFields">
+        <button
+          class="btn-primary"
+          type="button"
+          :disabled="fieldsSaving || fieldsLoading || !fieldsLoaded"
+          @click="saveFields"
+        >
           Сохранить
         </button>
       </div>
@@ -155,14 +167,15 @@ interface Category {
   is_active: boolean
 }
 
-const { api, page } = useApi()
+const { api, page, pageAll } = useApi()
 const { managers, loadManagers } = useManagers()
 const isAdmin = useAuth().isAdmin
 
-const items = ref<Category[]>([])
-const total = ref(0)
 const limit = PAGE_SIZE
-const offset = ref(0)
+const { items, total, offset, load, changeOffset: goTo } = useListLoader<Category>(
+  (off, signal) => page<Category>('/categories', { limit, offset: off }, signal),
+  limit,
+)
 const modal = ref(false)
 const saving = ref(false)
 const formError = ref('')
@@ -173,6 +186,8 @@ const selectedManagers = ref<number[]>([])
 const managersSaving = ref(false)
 const managersError = ref('')
 const managersCategoryId = ref(0)
+const managersLoading = ref(false)
+const managersLoaded = ref(false)
 
 // -- поля заявки категории --------------------------------------------------
 interface ReqField {
@@ -196,20 +211,25 @@ const fieldsRows = ref<FieldRow[]>([])
 const fieldsSaving = ref(false)
 const fieldsError = ref('')
 const fieldsCategoryId = ref(0)
+const fieldsLoading = ref(false)
+const fieldsLoaded = ref(false)
 
 async function openFields(cat: Category) {
+  // сброс состояния предыдущей категории: до загрузки «Сохранить» недоступна
   fieldsCategoryId.value = cat.id
+  fieldsRows.value = []
+  fieldsLoaded.value = false
+  fieldsLoading.value = true
   fieldsError.value = ''
   fieldsModal.value = true
   try {
-    if (!fieldsAll.value.length) {
-      const p = await page<ReqField>('/request-fields', { limit: 1000 })
-      fieldsAll.value = p.items
-    }
+    // справочник перечитывается: поля могли измениться на странице «Поля заявки»
+    fieldsAll.value = await pageAll<ReqField>('/request-fields')
     const out = await api<{
       category_id: number
       fields: { field: ReqField; sort_order: number; is_required: boolean }[]
     }>(`/request-fields/categories/${cat.id}/fields`)
+    if (fieldsCategoryId.value !== cat.id) return
     const linked = new Map(out.fields.map((f) => [f.field.id, f]))
     fieldsRows.value = fieldsAll.value.map((f) => {
       const link = linked.get(f.id)
@@ -220,9 +240,12 @@ async function openFields(cat: Category) {
         is_required: link?.is_required ?? f.is_required_default,
       }
     })
+    fieldsLoaded.value = true
   } catch (err) {
     console.warn('[categories] fields load failed', err)
-    fieldsError.value = 'Не удалось загрузить поля'
+    fieldsError.value = apiErrorMessage(err, 'Не удалось загрузить поля')
+  } finally {
+    if (fieldsCategoryId.value === cat.id) fieldsLoading.value = false
   }
 }
 
@@ -244,21 +267,14 @@ async function saveFields() {
     fieldsModal.value = false
   } catch (err) {
     console.warn('[categories] fields save failed', err)
-    fieldsError.value = 'Не удалось сохранить поля'
+    fieldsError.value = apiErrorMessage(err, 'Не удалось сохранить поля')
   } finally {
     fieldsSaving.value = false
   }
 }
 
-async function load() {
-  const p = await page<Category>('/categories', { limit, offset: offset.value })
-  items.value = p.items
-  total.value = p.total
-}
-
 function changeOffset(v: number) {
-  offset.value = v
-  load()
+  goTo(v, '[categories]')
 }
 
 function openCreate() {
@@ -299,7 +315,7 @@ async function save() {
     await load()
   } catch (err) {
     console.warn('[categories] save failed', err)
-    formError.value = 'Не удалось сохранить категорию'
+    formError.value = apiErrorMessage(err, 'Не удалось сохранить категорию')
   } finally {
     saving.value = false
   }
@@ -312,20 +328,32 @@ async function remove(cat: Category) {
     await load()
   } catch (err) {
     console.warn('[categories] delete failed', err)
-    alert('Не удалось удалить категорию')
+    alert(apiErrorMessage(err, 'Не удалось удалить категорию'))
   }
 }
 
 async function openManagers(cat: Category) {
+  // сброс состояния предыдущей категории: до загрузки «Сохранить» недоступна,
+  // иначе PUT перезаписал бы доступы новой категории списком предыдущей
   managersCategoryId.value = cat.id
+  selectedManagers.value = []
+  managersLoaded.value = false
+  managersLoading.value = true
   managersError.value = ''
   managersModal.value = true
   try {
-    const out = await api<{ category_id: number; user_ids: number[] }>(`/categories/${cat.id}/managers`)
+    const [out] = await Promise.all([
+      api<{ category_id: number; user_ids: number[] }>(`/categories/${cat.id}/managers`),
+      loadManagers(true),
+    ])
+    if (managersCategoryId.value !== cat.id) return
     selectedManagers.value = [...out.user_ids]
+    managersLoaded.value = true
   } catch (err) {
     console.warn('[categories] managers load failed', err)
-    managersError.value = 'Не удалось загрузить менеджеров'
+    managersError.value = apiErrorMessage(err, 'Не удалось загрузить менеджеров')
+  } finally {
+    if (managersCategoryId.value === cat.id) managersLoading.value = false
   }
 }
 
@@ -340,16 +368,12 @@ async function saveManagers() {
     managersModal.value = false
   } catch (err) {
     console.warn('[categories] managers save failed', err)
-    managersError.value = 'Не удалось сохранить менеджеров'
+    managersError.value = apiErrorMessage(err, 'Не удалось сохранить менеджеров')
   } finally {
     managersSaving.value = false
   }
 }
 
-onMounted(async () => {
-  // список менеджеров нужен только для admin-модалок назначения
-  if (isAdmin.value) await loadManagers()
-})
-
-await load()
+// ошибка загрузки — сообщение пользователю, а не пустая страница
+await load().catch((err) => showLoadError(err, '[categories]'))
 </script>

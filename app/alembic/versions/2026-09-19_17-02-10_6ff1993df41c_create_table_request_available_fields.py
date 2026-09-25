@@ -11,7 +11,17 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
-from app.domain.models import RequestFieldType
+import enum
+
+
+# Замороженная копия enum на момент миграции: изменения app.domain.models
+# не должны менять историю схемы
+class RequestFieldType(str, enum.Enum):
+    TEXT = "text"
+    NUMBER = "number"
+    DATE = "date"
+    TIME = "time"
+    SELECT = "select"
 
 
 # revision identifiers, used by Alembic.

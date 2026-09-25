@@ -1,6 +1,7 @@
 """Сервис JWT-токенов (access + refresh).
 
-Токены содержат: sub (user id), role, jti, тип (access/refresh), exp.
+Токены содержат: sub (user id), role, jti, тип (access/refresh), exp,
+sid (id сессии в таблице sessions — отзыв сессии отзывает и access).
 jti refresh-токена хранится в таблице sessions (привязка к устройству).
 """
 
@@ -59,6 +60,7 @@ class TokenService:
         role: str,
         jti: str,
         expires_at: datetime,
+        session_id: int | None = None,
     ) -> str:
         payload: dict[str, Any] = {
             "sub": str(user_id),
@@ -68,6 +70,8 @@ class TokenService:
             "exp": expires_at,
             "iat": datetime.now(timezone.utc),
         }
+        if session_id is not None:
+            payload["sid"] = session_id
         return jwt.encode(payload, self.secret, algorithm=self.algorithm)
 
     def _decode(self, token: str, expected_type: str) -> dict[str, Any]:
@@ -83,10 +87,26 @@ class TokenService:
     def _expires(ttl: timedelta) -> datetime:
         return datetime.now(timezone.utc) + ttl
 
-    def create_pair(self, *, user_id: int, role: str) -> TokenPair:
-        """Создать пару access/refresh для пользователя."""
-        access_jti = uuid.uuid4().hex
-        refresh_jti = uuid.uuid4().hex
+    @staticmethod
+    def new_jti() -> str:
+        """Новый идентификатор токена."""
+        return uuid.uuid4().hex
+
+    def create_pair(
+        self,
+        *,
+        user_id: int,
+        role: str,
+        session_id: int | None = None,
+        refresh_jti: str | None = None,
+    ) -> TokenPair:
+        """Создать пару access/refresh для пользователя.
+
+        session_id — id сессии (claim sid) для проверки активности сессии;
+        refresh_jti — заранее сгенерированный jti (сессия создаётся до токенов).
+        """
+        access_jti = self.new_jti()
+        refresh_jti = refresh_jti or self.new_jti()
         access_exp = self._expires(self.access_ttl)
         refresh_exp = self._expires(self.refresh_ttl)
         return TokenPair(
@@ -96,6 +116,7 @@ class TokenService:
                 role=role,
                 jti=access_jti,
                 expires_at=access_exp,
+                session_id=session_id,
             ),
             refresh_token=self._encode(
                 token_type=TOKEN_TYPE_REFRESH,
@@ -103,6 +124,7 @@ class TokenService:
                 role=role,
                 jti=refresh_jti,
                 expires_at=refresh_exp,
+                session_id=session_id,
             ),
             access_jti=access_jti,
             refresh_jti=refresh_jti,

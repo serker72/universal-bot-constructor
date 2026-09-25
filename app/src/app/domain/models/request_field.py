@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import enum
 
-from sqlalchemy import Boolean, Enum, String
+from sqlalchemy import Boolean, Enum, Index, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -32,9 +32,12 @@ class RequestAvailableField(Base, TimestampMixin):
     """
 
     __tablename__ = "request_available_fields"
+    __table_args__ = (
+        Index("uq_request_available_fields_code", "code", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
     type: Mapped[RequestFieldType] = mapped_column(
         Enum(
             RequestFieldType,
@@ -46,10 +49,15 @@ class RequestAvailableField(Base, TimestampMixin):
     )
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     is_required_default: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
+        Boolean, nullable=False, default=False, server_default=text("false")
     )
     meta_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # FK request_category_fields.field_id — ON DELETE CASCADE: привязки к
+    # категориям удаляет БД (passive_deletes), ORM не делает UPDATE ... SET
+    # field_id = NULL (NOT NULL → IntegrityError и ложный 400 при удалении)
     category_links: Mapped[list["RequestCategoryField"]] = relationship(
         back_populates="field",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )

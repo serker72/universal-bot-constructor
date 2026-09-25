@@ -7,7 +7,7 @@
 
 from typing import TypeVar
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import InstrumentedAttribute
 
 from app.domain.base import Base
@@ -73,6 +73,17 @@ class ManagerLinkMixin:
         ).first()
         if link is not None:
             await self.session.delete(link)  # type: ignore[attr-defined]
+
+    async def remove_managers(self, entity_id: int, user_ids: set[int]) -> None:
+        """Снять нескольких менеджеров одним DELETE (вместо SELECT+DELETE на каждого)."""
+        if not user_ids:
+            return
+        await self.session.execute(  # type: ignore[attr-defined]
+            delete(self.link_model).where(
+                self.link_entity_attr == entity_id,
+                self.link_model.user_id.in_(user_ids),
+            )
+        )
 
     async def list_manager_ids(self, entity_id: int) -> list[int]:
         """Id менеджеров, назначенных на сущность."""

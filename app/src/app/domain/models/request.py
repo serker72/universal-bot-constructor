@@ -3,7 +3,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.base import Base, TimestampMixin
@@ -28,6 +28,11 @@ class Request(Base, TimestampMixin):
     """
 
     __tablename__ = "requests"
+    __table_args__ = (
+        Index("ix_requests_status_created_at", "status", text("created_at DESC")),
+        # список заявок без фильтра по статусу: ORDER BY created_at DESC, id DESC
+        Index("ix_requests_created_at_id", text("created_at DESC"), text("id DESC")),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     visitor_id: Mapped[int] = mapped_column(
@@ -45,6 +50,7 @@ class Request(Base, TimestampMixin):
         Enum(RequestStatus, name="tp_request_status"),
         nullable=False,
         default=RequestStatus.NEW,
+        server_default=text("'NEW'"),
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -52,8 +58,10 @@ class Request(Base, TimestampMixin):
 
     visitor: Mapped["Visitor"] = relationship()
     object: Mapped["Object"] = relationship()
+    # lazy="raise": значения загружаются только явно (selectinload в
+    # RequestRepository), без скрытых запросов при каждой загрузке заявки
     values: Mapped[list["RequestField"]] = relationship(
         back_populates="request",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="raise",
     )

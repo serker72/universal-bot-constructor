@@ -4,13 +4,17 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Лимит Telegram на текст сообщения — 4096 символов; карточка объекта =
+# название (до 255) + описание, с запасом под HTML-разметку и санитизацию
+SHORT_DESCRIPTION_MAX_LENGTH = 3500
+
 
 class ObjectIn(BaseModel):
     """Создание объекта (все поля обязательны, кроме опциональных)."""
 
     category_id: int
     name: str = Field(min_length=1, max_length=255)
-    short_description: str = ""
+    short_description: str = Field(default="", max_length=SHORT_DESCRIPTION_MAX_LENGTH)
     sort_order: int = 0
     is_active: bool = True
 
@@ -20,7 +24,9 @@ class ObjectUpdateIn(BaseModel):
 
     category_id: int | None = None
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    short_description: str | None = None
+    short_description: str | None = Field(
+        default=None, max_length=SHORT_DESCRIPTION_MAX_LENGTH
+    )
     sort_order: int | None = None
     is_active: bool | None = None
 

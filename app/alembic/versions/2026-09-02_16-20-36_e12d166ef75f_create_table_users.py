@@ -11,7 +11,14 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-from app.domain.models.user import UserRole
+import enum
+
+
+# Замороженная копия enum на момент миграции: изменения app.domain.models
+# не должны менять историю схемы
+class UserRole(str, enum.Enum):
+    ADMIN = "admin"
+    MANAGER = "manager"
 
 # revision identifiers, used by Alembic.
 revision: str = "e12d166ef75f"

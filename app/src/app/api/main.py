@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from faststream.rabbit import RabbitBroker
 
 from app.api.health import router as health_router
+from app.api.origin import OriginCheckMiddleware
 from app.api.routers import (
     auth_router,
     categories_router,
@@ -33,11 +34,18 @@ from dishka.integrations.fastapi import setup_dishka
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Старт/остановка брокера (публикация событий из API)."""
-    broker: RabbitBroker = await app.state.dishka_container.get(RabbitBroker)
+    """Старт/остановка брокера (публикация событий из API).
+
+    При остановке закрывается DI-контейнер: финализаторы APP-scope
+    (broker.stop, Redis.aclose, engine.dispose) — соединения закрываются корректно.
+    """
+    container = app.state.dishka_container
+    broker: RabbitBroker = await container.get(RabbitBroker)
     await broker.start()
-    yield
-    await broker.stop()
+    try:
+        yield
+    finally:
+        await container.close()
 
 
 def create_app() -> FastAPI:
@@ -59,6 +67,9 @@ def create_app() -> FastAPI:
     setup_dishka(container, app=app)
     app.state.dishka_container = container
 
+    # Origin-проверка мутирующих запросов (cookie-аутентификация, CSRF);
+    # добавляется до CORS — CORS остаётся внешним и отвечает на preflight
+    app.add_middleware(OriginCheckMiddleware, allowed_origins=settings.cors.origins)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors.origins,

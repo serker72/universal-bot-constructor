@@ -78,3 +78,18 @@ async def test_revoke_all_for_user(
     # пользователь без сессий — 0
     resp = await admin_client.post(f"{API}/sessions/users/9999/revoke-all")
     assert resp.json() == {"revoked": 0}
+
+
+async def test_revoked_session_access_token_rejected(
+    admin_client, manager_client, manager_user
+):
+    """После отзыва сессии её access-токен не принимается (а не живёт до exp)."""
+    resp = await manager_client.get(f"{API}/auth/me")
+    assert resp.status_code == 200
+    resp = await admin_client.get(
+        f"{API}/sessions", params={"user_id": manager_user.id, "only_active": True}
+    )
+    session_id = resp.json()["items"][0]["id"]
+    await admin_client.post(f"{API}/sessions/{session_id}/revoke")
+    resp = await manager_client.get(f"{API}/auth/me")
+    assert resp.status_code == 401

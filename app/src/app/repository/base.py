@@ -37,12 +37,23 @@ class BaseRepository(Generic[ModelT]):
         *conditions: ColumnExpressionArgument[bool],
         limit: int | None = None,
         offset: int = 0,
-        order_by: ColumnExpressionArgument[Any] | None = None,
+        order_by: ColumnExpressionArgument[Any]
+        | Sequence[ColumnExpressionArgument[Any]]
+        | None = None,
     ) -> Sequence[ModelT]:
-        """Список объектов по условиям с пагинацией и сортировкой."""
+        """Список объектов по условиям с пагинацией и сортировкой.
+
+        К сортировке всегда добавляется первичный ключ (tie-breaker): без
+        детерминированного ORDER BY LIMIT/OFFSET даёт дубли и пропуски строк.
+        """
         stmt = select(self.model).where(*conditions)
-        if order_by is not None:
-            stmt = stmt.order_by(order_by)
+        if order_by is None:
+            order = []
+        elif isinstance(order_by, (list, tuple)):
+            order = list(order_by)
+        else:
+            order = [order_by]
+        stmt = stmt.order_by(*order, *self.model.__mapper__.primary_key)
         if limit is not None:
             stmt = stmt.limit(limit)
         stmt = stmt.offset(offset)

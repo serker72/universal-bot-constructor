@@ -10,6 +10,13 @@
     PYTHONPATH=src POSTGRES_HOST=127.0.0.1 ../.venv/bin/python -m app.scripts.create_admin \
         --username admin
 
+Пароль: интерактивно (по умолчанию), из переменной окружения
+UBC_ADMIN_PASSWORD (автоматизация) или --password-stdin (одна строка из stdin).
+Флаг --password оставлен для совместимости, но НЕ рекомендуется: значение
+видно в ps, /proc/<pid>/cmdline и остаётся в истории shell.
+
+Смена пароля существующего пользователя отзывает все его сессии.
+
 Коды выхода: 0 — успех; 1 — неверный ввод (политика пароля, пароли
 не совпадают, пустой username); 2 — ошибка подключения/работы с БД.
 """
@@ -17,6 +24,7 @@
 import argparse
 import asyncio
 import getpass
+import os
 import sys
 from collections.abc import Callable, Sequence
 
@@ -27,12 +35,16 @@ from app.config.settings import Settings
 from app.db.engine import create_engine, create_session_factory
 from app.domain.models.user import User, UserRole
 from app.log import get_logger, setup_logging
+from app.repository.session import SessionRepository
 from app.repository.user import UserRepository
 from app.services.password import PasswordError, hash_password, validate_password_policy
 
 EXIT_OK = 0
 EXIT_INPUT_ERROR = 1
 EXIT_DB_ERROR = 2
+
+# Переменная окружения с паролем (не попадает в argv и историю shell)
+PASSWORD_ENV = "UBC_ADMIN_PASSWORD"
 
 logger = get_logger(__name__)
 
@@ -50,7 +62,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--username", required=True, help="имя входа")
     parser.add_argument(
         "--password",
-        help="пароль (8–72 байта); без флага — запрос с повторным вводом",
+        help=(
+            "НЕ РЕКОМЕНДУЕТСЯ: пароль виден в ps и истории shell. "
+            f"Используйте интерактивный ввод, {PASSWORD_ENV} или --password-stdin"
+        ),
+    )
+    parser.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="прочитать пароль из stdin (одна строка)",
     )
     parser.add_argument(
         "--role",
@@ -100,6 +120,9 @@ async def upsert_user(
     user.password_hash = password_hash
     user.role = role
     user.is_active = True
+    # смена пароля: уже выданные токены пользователя перестают работать
+    # (access отклоняется по неактивной сессии, refresh — отозван)
+    await SessionRepository(session).revoke_all_for_user(user.id)
     await session.flush()
     return user, False
 
@@ -137,7 +160,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         username = args.username.strip()
         if not username:
             raise InputError("Имя пользователя не может быть пустым")
-        password = read_password(args.password)
+        password = args.password
+        if password is None and args.password_stdin:
+            password = sys.stdin.readline().rstrip("\n")
+        if password is None:
+            password = os.environ.get(PASSWORD_ENV) or None
+        password = read_password(password)
     except InputError as exc:
         logger.error("invalid_input", detail=str(exc))
         return EXIT_INPUT_ERROR

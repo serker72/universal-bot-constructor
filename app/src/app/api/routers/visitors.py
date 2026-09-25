@@ -2,15 +2,16 @@
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status
-from dishka.integrations.fastapi import DishkaRoute, FromDishka
+from fastapi import APIRouter
+from dishka.integrations.fastapi import FromDishka
 
+from app.api.routing import TransactionalRoute
 from app.api.deps import AdminUser, get_or_404
-from app.api.schemas.common import Page
+from app.api.schemas.common import LimitQuery, OffsetQuery, Page
 from app.api.schemas.visitor import VisitorOut
 from app.repository.visitor import VisitorRepository
 
-router = APIRouter(prefix="/visitors", route_class=DishkaRoute, tags=["visitors"])
+router = APIRouter(prefix="/visitors", route_class=TransactionalRoute, tags=["visitors"])
 
 
 @router.get("", response_model=Page[VisitorOut])
@@ -19,8 +20,8 @@ async def list_visitors(
     repo: FromDishka[VisitorRepository],
     search: str | None = None,
     is_blocked: bool | None = None,
-    limit: int = 20,
-    offset: int = 0,
+    limit: LimitQuery = 20,
+    offset: OffsetQuery = 0,
 ) -> Page[VisitorOut]:
     """Список посетителей с поиском по ФИО и фильтром блокировки."""
     items, total = await repo.list_page(

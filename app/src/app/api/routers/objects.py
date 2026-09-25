@@ -6,13 +6,13 @@
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import asc
-from sqlalchemy.exc import IntegrityError
-from dishka.integrations.fastapi import DishkaRoute, FromDishka
+from dishka.integrations.fastapi import FromDishka
 
+from app.api.routing import TransactionalRoute
 from app.api.access import visible_object_ids
-from app.api.deps import AdminUser, get_or_404
+from app.api.deps import AdminUser, flush_or_400, get_or_404
 from app.api.managers_sync import sync_managers
-from app.api.schemas.common import Page
+from app.api.schemas.common import LimitQuery, OffsetQuery, Page
 from app.api.schemas.object import (
     ObjectIn,
     ObjectManagersIn,
@@ -25,7 +25,7 @@ from app.repository.object import ObjectRepository
 from app.repository.user import UserRepository
 from app.services.pdf import PdfService
 
-router = APIRouter(prefix="/objects", route_class=DishkaRoute, tags=["objects"])
+router = APIRouter(prefix="/objects", route_class=TransactionalRoute, tags=["objects"])
 
 
 def _to_out(obj: Object) -> ObjectOut:
@@ -40,8 +40,8 @@ async def list_objects(
     user: FromDishka[User],
     repo: FromDishka[ObjectRepository],
     category_id: int | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: LimitQuery = 50,
+    offset: OffsetQuery = 0,
 ) -> Page[ObjectOut]:
     """Список объектов (admin — все; менеджер — свои; фильтр по категории)."""
     conditions = []
@@ -80,14 +80,9 @@ async def create_object(
         sort_order=data.sort_order,
         is_active=data.is_active,
     )
-    try:
-        await repo.add(obj)
-    except IntegrityError:
-        # несуществующая category_id (FK на уровне БД)
-        await repo.session.rollback()
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Invalid category_id"
-        ) from None
+    repo.session.add(obj)
+    # несуществующая category_id (FK на уровне БД) — 400 до ответа
+    await flush_or_400(repo.session, "Invalid category_id")
     return _to_out(obj)
 
 
@@ -125,6 +120,10 @@ async def update_object(
         obj.sort_order = data.sort_order
     if data.is_active is not None:
         obj.is_active = data.is_active
+    # FK category_id проверяется БД до ответа (а не на commit после него)
+    await flush_or_400(repo.session, "Invalid category_id")
+    # updated_at (server onupdate) истёк после flush — перечитать до сериализации
+    await repo.session.refresh(obj)
     return _to_out(obj)
 
 
@@ -135,12 +134,16 @@ async def delete_object(
     repo: FromDishka[ObjectRepository],
     pdf: FromDishka[PdfService],
 ) -> None:
-    """Удалить объект (вместе с PDF-файлом с диска)."""
+    """Удалить объект (вместе с PDF-файлом с диска).
+
+    Файл удаляется после commit: при откате транзакции запись и файл остаются.
+    """
     obj = get_or_404(await repo.get(object_id), "Object not found")
-    # файл удаляем до удаления записи: иначе путь потеряется
-    if obj.pdf_path:
-        pdf.delete(obj.pdf_path)
+    pdf_path = obj.pdf_path
     await repo.delete(obj)
+    await repo.session.commit()
+    if pdf_path:
+        pdf.delete(pdf_path)
 
 
 @router.get("/{object_id}/managers", response_model=ObjectManagersOut)
@@ -150,7 +153,7 @@ async def get_managers(
     repo: FromDishka[ObjectRepository],
 ) -> ObjectManagersOut:
     """Список id менеджеров объекта."""
-    obj = get_or_404(await repo.get(object_id), "Object not found")
+    get_or_404(await repo.get(object_id), "Object not found")
     user_ids = await repo.list_manager_ids(object_id)
     return ObjectManagersOut(object_id=object_id, user_ids=user_ids)
 
@@ -164,7 +167,7 @@ async def set_managers(
     users: FromDishka[UserRepository],
 ) -> ObjectManagersOut:
     """Заменить список менеджеров объекта (только роль manager)."""
-    obj = get_or_404(await repo.get(object_id), "Object not found")
+    get_or_404(await repo.get(object_id), "Object not found")
     user_ids = await sync_managers(
         repo, object_id, data.user_ids, users, require_manager_role=True
     )

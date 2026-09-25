@@ -26,8 +26,30 @@ async def test_upload_and_download(admin_client, manager_client, obj, settings):
     assert resp.headers["content-type"] == "application/pdf"
     assert resp.content == PDF_CONTENT
 
-    # скачивание: manager (любой авторизованный)
+    # скачивание: manager без назначения на объект — 404 (IDOR)
     resp = await manager_client.get(_upload_url(obj.id))
+    assert resp.status_code == 404
+
+
+async def test_manager_downloads_only_own_active_object(
+    admin_client, manager_client, manager_user, obj
+):
+    """Менеджер получает PDF только своего активного объекта."""
+    await admin_client.put(
+        _upload_url(obj.id),
+        files={"file": (PDF_FILENAME, PDF_CONTENT, "application/pdf")},
+    )
+    await admin_client.put(
+        f"{API}/objects/{obj.id}/managers", json={"user_ids": [manager_user.id]}
+    )
+    resp = await manager_client.get(_upload_url(obj.id))
+    assert resp.status_code == 200
+
+    await admin_client.patch(f"{API}/objects/{obj.id}", json={"is_active": False})
+    resp = await manager_client.get(_upload_url(obj.id))
+    assert resp.status_code == 404
+    # admin — и неактивного объекта
+    resp = await admin_client.get(_upload_url(obj.id))
     assert resp.status_code == 200
 
 

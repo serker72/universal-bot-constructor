@@ -17,13 +17,22 @@ from app.scripts.create_admin import (
 
 
 class FakeSession:
-    """Заглушка AsyncSession: считает flush."""
+    """Заглушка AsyncSession: считает flush и execute (отзыв сессий)."""
 
     def __init__(self) -> None:
         self.flushed = 0
+        self.executed = 0
 
     async def flush(self) -> None:
         self.flushed += 1
+
+    async def execute(self, stmt):  # noqa: ANN001
+        self.executed += 1
+
+        class _Result:
+            rowcount = 0
+
+        return _Result()
 
 
 class FakeUserRepository:
@@ -62,9 +71,9 @@ def test_parse_args_defaults():
 
 
 def test_parse_args_manager_role_and_password():
-    args = parse_args(["--username", "m1", "--password", "secret-123", "--role", "manager"])
+    args = parse_args(["--username", "m1", "--password", "secret-pass-123", "--role", "manager"])
     assert args.role == "manager"
-    assert args.password == "secret-123"
+    assert args.password == "secret-pass-123"
 
 
 def test_parse_args_username_required():
@@ -81,21 +90,21 @@ def test_parse_args_invalid_role():
 
 
 def test_read_password_from_argument():
-    assert read_password("secret-123") == "secret-123"
+    assert read_password("secret-pass-123") == "secret-pass-123"
 
 
 def test_read_password_interactive_confirmed():
-    answers = iter(["secret-123", "secret-123"])
-    assert read_password(None, prompt=lambda _: next(answers)) == "secret-123"
+    answers = iter(["secret-pass-123", "secret-pass-123"])
+    assert read_password(None, prompt=lambda _: next(answers)) == "secret-pass-123"
 
 
 def test_read_password_interactive_mismatch():
-    answers = iter(["secret-123", "other-1234"])
+    answers = iter(["secret-pass-123", "other-pass-1234"])
     with pytest.raises(InputError, match="не совпадают"):
         read_password(None, prompt=lambda _: next(answers))
 
 
-@pytest.mark.parametrize("password", ["short", "x" * 73])
+@pytest.mark.parametrize("password", ["short", "x" * 73, "Password123"])
 def test_read_password_policy_violation(password):
     with pytest.raises(InputError):
         read_password(password)
@@ -131,6 +140,8 @@ async def test_upsert_updates_existing_user(fake_repo):
     assert user.role is UserRole.ADMIN
     assert user.is_active is True
     assert session.flushed == 1
+    # смена пароля отзывает сессии пользователя (UPDATE sessions)
+    assert session.executed == 1
 
 
 # --- main: ошибки ввода без обращения к БД ---
@@ -151,5 +162,5 @@ def test_main_invalid_password_exit_code(monkeypatch):
 
 def test_main_blank_username_exit_code(monkeypatch):
     monkeypatch.setattr(create_admin, "run", lambda *a, **k: None)
-    code = create_admin.main(["--username", "   ", "--password", "secret-123"])
+    code = create_admin.main(["--username", "   ", "--password", "secret-pass-123"])
     assert code == EXIT_INPUT_ERROR

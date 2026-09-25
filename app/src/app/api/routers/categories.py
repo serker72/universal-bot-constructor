@@ -7,8 +7,9 @@
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import asc
-from dishka.integrations.fastapi import DishkaRoute, FromDishka
+from dishka.integrations.fastapi import FromDishka
 
+from app.api.routing import TransactionalRoute
 from app.api.access import visible_category_ids
 from app.api.deps import AdminUser, get_or_404
 from app.api.managers_sync import sync_managers
@@ -19,22 +20,22 @@ from app.api.schemas.category import (
     CategoryOut,
     CategoryUpdateIn,
 )
-from app.api.schemas.common import Page
+from app.api.schemas.common import LimitQuery, OffsetQuery, Page
 from app.domain.models import Category, User
 from app.repository.category import CategoryRepository
 from app.repository.object import ObjectRepository
 from app.repository.user import UserRepository
 from app.services.pdf import PdfService
 
-router = APIRouter(prefix="/categories", route_class=DishkaRoute, tags=["categories"])
+router = APIRouter(prefix="/categories", route_class=TransactionalRoute, tags=["categories"])
 
 
 @router.get("", response_model=Page[CategoryOut])
 async def list_categories(
     user: FromDishka[User],
     repo: FromDishka[CategoryRepository],
-    limit: int = 50,
-    offset: int = 0,
+    limit: LimitQuery = 50,
+    offset: OffsetQuery = 0,
 ) -> Page[CategoryOut]:
     """Список категорий (admin — все; менеджер — доступные)."""
     conditions = []
@@ -109,6 +110,9 @@ async def update_category(
         category.sort_order = data.sort_order
     if data.is_active is not None:
         category.is_active = data.is_active
+    await repo.session.flush()
+    # updated_at (server onupdate) истёк после flush — перечитать до сериализации
+    await repo.session.refresh(category)
     return CategoryOut.model_validate(category)
 
 
@@ -122,12 +126,17 @@ async def delete_category(
 ) -> None:
     """Удалить категорию (вместе с объектами и их PDF-файлами — CASCADE)."""
     category = get_or_404(await repo.get(category_id), "Category not found")
-    # pdf_path объектов удаляется вместе с объектами (FK CASCADE) —
-    # чистим файлы до удаления записей
-    for obj in await objects.list_by_category(category_id):
-        if obj.pdf_path:
-            pdf.delete(obj.pdf_path)
+    # pdf_path объектов удаляется вместе с объектами (FK CASCADE) — пути
+    # запоминаем до удаления, файлы удаляем после commit (при откате остаются)
+    pdf_paths = [
+        obj.pdf_path
+        for obj in await objects.list_by_category(category_id)
+        if obj.pdf_path
+    ]
     await repo.delete(category)
+    await repo.session.commit()
+    for pdf_path in pdf_paths:
+        pdf.delete(pdf_path)
 
 
 @router.get("/{category_id}/managers", response_model=CategoryManagersOut)
@@ -137,9 +146,7 @@ async def get_managers(
     repo: FromDishka[CategoryRepository],
 ) -> CategoryManagersOut:
     """Список id менеджеров категории."""
-    category = get_or_404(
-        await repo.get(category_id), "Category not found"
-    )
+    get_or_404(await repo.get(category_id), "Category not found")
     user_ids = await repo.list_manager_ids(category_id)
     return CategoryManagersOut(category_id=category_id, user_ids=user_ids)
 
@@ -153,9 +160,9 @@ async def set_managers(
     users: FromDishka[UserRepository],
 ) -> CategoryManagersOut:
     """Заменить список менеджеров категории (доступ ко всем объектам
-    категории)."""
-    category = get_or_404(
-        await repo.get(category_id), "Category not found"
+    категории; только роль manager — admin заявки не обрабатывает)."""
+    get_or_404(await repo.get(category_id), "Category not found")
+    user_ids = await sync_managers(
+        repo, category_id, data.user_ids, users, require_manager_role=True
     )
-    user_ids = await sync_managers(repo, category_id, data.user_ids, users)
     return CategoryManagersOut(category_id=category_id, user_ids=user_ids)

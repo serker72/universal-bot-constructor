@@ -7,11 +7,12 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
-from dishka.integrations.fastapi import DishkaRoute, FromDishka
+from dishka.integrations.fastapi import FromDishka
 
+from app.api.routing import TransactionalRoute
 from app.api.access import visible_object_ids
 from app.api.deps import get_or_404
-from app.api.schemas.common import Page
+from app.api.schemas.common import LimitQuery, OffsetQuery, Page
 from app.api.schemas.request import RequestOut, RequestStatusIn
 from app.api.schemas.request_field import RequestFieldValueOut
 from app.domain.models import Request, RequestStatus, User, UserRole
@@ -22,7 +23,7 @@ from app.services.events import (
     RequestStatusChangedEvent,
 )
 
-router = APIRouter(prefix="/requests", route_class=DishkaRoute, tags=["requests"])
+router = APIRouter(prefix="/requests", route_class=TransactionalRoute, tags=["requests"])
 
 
 def _to_out(req: Request) -> RequestOut:
@@ -49,10 +50,14 @@ async def list_requests(
     object_id: int | None = None,
     date_from: datetime | None = None,
     date_to: datetime | None = None,
-    limit: int = 20,
-    offset: int = 0,
+    limit: LimitQuery = 20,
+    offset: OffsetQuery = 0,
 ) -> Page[RequestOut]:
-    """Список заявок (менеджер — только по своим объектам)."""
+    """Список заявок (менеджер — только по своим объектам).
+
+    Фильтр дат: date_from <= created_at < date_to (верхняя граница исключена —
+    для «по день N» передаётся 00:00 следующего дня).
+    """
     object_ids = await visible_object_ids(user, objects)
     items, total = await repo.list_page(
         object_ids=object_ids,
@@ -101,8 +106,11 @@ async def change_status(
     Допустимые переходы: new → approved | rejected,
     approved → completed (менеджер объекта).
     """
+    # SELECT ... FOR UPDATE: параллельная отмена посетителем (бот) ждёт
+    # завершения транзакции и проверяет переход по актуальному статусу
     req = get_or_404(
-        await repo.get_with_values(request_id), "Request not found"
+        await repo.get_with_values(request_id, for_update=True),
+        "Request not found",
     )
 
     # доступ: менеджер, назначенный на объект напрямую или на категорию объекта

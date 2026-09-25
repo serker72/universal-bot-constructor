@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from sqlalchemy import asc, select
 from sqlalchemy.orm import selectinload
 
-from app.domain.models import CategoryManager, Object, ObjectManager
+from app.domain.models import Category, CategoryManager, Object, ObjectManager
 from app.repository.base import BaseRepository
 from app.repository.manager_link import ManagerLinkMixin, link_entity
 
@@ -30,6 +30,17 @@ class ObjectRepository(BaseRepository[Object], ManagerLinkMixin):
         )
         return (await self.session.scalars(stmt)).first()
 
+    @staticmethod
+    def active_conditions(category_id: int) -> list:
+        """Условия «активный объект активной категории» (меню бота)."""
+        return [
+            Object.category_id == category_id,
+            Object.is_active.is_(True),
+            Object.category_id.in_(
+                select(Category.id).where(Category.is_active.is_(True))
+            ),
+        ]
+
     async def list_by_category(
         self,
         category_id: int,
@@ -38,10 +49,12 @@ class ObjectRepository(BaseRepository[Object], ManagerLinkMixin):
         limit: int | None = None,
         offset: int = 0,
     ) -> Sequence[Object]:
-        """Объекты категории (для меню бота — только активные)."""
-        conditions = [Object.category_id == category_id]
+        """Объекты категории (для меню бота — только активные объекты
+        активной категории)."""
         if only_active:
-            conditions.append(Object.is_active.is_(True))
+            conditions = self.active_conditions(category_id)
+        else:
+            conditions = [Object.category_id == category_id]
         return await self.find(
             *conditions,
             limit=limit,

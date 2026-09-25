@@ -94,3 +94,43 @@ async def test_set_delegates_to_repo(service: AppSettingsService, repo):
     await service.set(KEY_WELCOME_TEXT, "Новый текст")
     assert repo.upserted == [(KEY_WELCOME_TEXT, "Новый текст")]
     assert await service.get_welcome_text() == "Новый текст"
+
+
+async def test_empty_welcome_disables_greeting(service, repo):
+    """Пустая строка — приветствие отключено (а не текст по умолчанию)."""
+    repo.values = {KEY_WELCOME_TEXT: ""}
+    assert await service.get_welcome_text() == ""
+
+
+async def test_page_size_above_max_falls_back(service, repo):
+    from app.services.app_settings import MAX_PAGE_SIZE
+
+    repo.values = {KEY_PAGE_SIZE: str(MAX_PAGE_SIZE + 1)}
+    assert await service.get_page_size() == DEFAULT_PAGE_SIZE
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        (KEY_PAGE_SIZE, "0"),
+        (KEY_PAGE_SIZE, "101"),
+        (KEY_PAGE_SIZE, "abc"),
+        (KEY_PAGE_SIZE, ""),
+        (KEY_CANCEL_INTERVAL_MINUTES, "-1"),
+        (KEY_CANCEL_INTERVAL_MINUTES, ""),
+        (KEY_WELCOME_TEXT, "x" * 5000),
+    ],
+)
+def test_validate_setting_rejects(key, value):
+    from app.services.app_settings import validate_setting
+
+    with pytest.raises(ValueError):
+        validate_setting(key, value)
+
+
+def test_validate_setting_normalizes_numbers():
+    from app.services.app_settings import validate_setting
+
+    assert validate_setting(KEY_PAGE_SIZE, " 7 ") == "7"
+    assert validate_setting(KEY_CANCEL_INTERVAL_MINUTES, "0") == "0"
+    assert validate_setting(KEY_WELCOME_TEXT, "") == ""

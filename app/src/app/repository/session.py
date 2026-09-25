@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from datetime import datetime, timezone
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from app.domain.models import Session
 from app.repository.base import BaseRepository
@@ -15,6 +15,17 @@ class SessionRepository(BaseRepository[Session]):
     async def get_by_jti(self, jti: str) -> Session | None:
         """Сессия по jti refresh-токена."""
         return await self.find_one(Session.refresh_token_jti == jti)
+
+    async def get_for_update(self, session_id: int) -> Session | None:
+        """Сессия по id с блокировкой строки (SELECT ... FOR UPDATE) — ротация
+        refresh сериализуется, параллельный запрос видит уже новый jti."""
+        stmt = (
+            select(Session)
+            .where(Session.id == session_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return (await self.session.scalars(stmt)).first()
 
     async def list_by_user(
         self,
@@ -33,7 +44,7 @@ class SessionRepository(BaseRepository[Session]):
             conditions.append(Session.is_active.is_(True))
         items = await self.find(
             *conditions, limit=limit, offset=offset,
-            order_by=Session.created_at.desc(),
+            order_by=(Session.created_at.desc(), Session.id.desc()),
         )
         total = await self.count(*conditions)
         return items, total

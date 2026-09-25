@@ -1,16 +1,17 @@
 """Роутер сессий (только admin): список, отзыв одной/всех."""
 
-from fastapi import APIRouter, HTTPException, status
-from dishka.integrations.fastapi import DishkaRoute, FromDishka
+from fastapi import APIRouter
+from dishka.integrations.fastapi import FromDishka
 
+from app.api.routing import TransactionalRoute
 from app.api.deps import AdminUser, get_or_404
-from app.api.schemas.common import Page
+from app.api.schemas.common import LimitQuery, OffsetQuery, Page
 from app.api.schemas.session import SessionOut
 from app.domain.models import Session
 from app.repository.session import SessionRepository
 from app.services.auth import AuthService
 
-router = APIRouter(prefix="/sessions", route_class=DishkaRoute, tags=["sessions"])
+router = APIRouter(prefix="/sessions", route_class=TransactionalRoute, tags=["sessions"])
 
 
 @router.get("", response_model=Page[SessionOut])
@@ -19,8 +20,8 @@ async def list_sessions(
     repo: FromDishka[SessionRepository],
     user_id: int | None = None,
     only_active: bool = False,
-    limit: int = 50,
-    offset: int = 0,
+    limit: LimitQuery = 50,
+    offset: OffsetQuery = 0,
 ) -> Page[SessionOut]:
     """Список сессий (фильтр по пользователю, только активные)."""
     if user_id is not None:
@@ -32,7 +33,10 @@ async def list_sessions(
         conditions = []
         if only_active:
             conditions.append(Session.is_active.is_(True))
-        page = await repo.find(*conditions, limit=limit, offset=offset)
+        page = await repo.find(
+            *conditions, limit=limit, offset=offset,
+            order_by=(Session.created_at.desc(), Session.id.desc()),
+        )
         total = await repo.count(*conditions)
     return Page(
         items=[SessionOut.model_validate(s) for s in page],
@@ -49,7 +53,7 @@ async def revoke_session(
     repo: FromDishka[SessionRepository],
     auth: FromDishka[AuthService],
 ) -> SessionOut:
-    """Отозвать одну сессию (refresh-токен в blacklist)."""
+    """Отозвать одну сессию (refresh в blacklist, access — по неактивной сессии)."""
     session = get_or_404(await repo.get(session_id), "Session not found")
     if session.is_active:
         await auth.revoke_session(session)

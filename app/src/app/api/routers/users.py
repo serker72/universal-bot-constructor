@@ -1,29 +1,37 @@
 """Роутер пользователей (только admin)."""
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy.exc import IntegrityError
-from dishka.integrations.fastapi import DishkaRoute, FromDishka
+from dishka.integrations.fastapi import FromDishka
 
-from app.api.deps import AdminUser, get_or_404
-from app.api.schemas.common import Page
+from app.api.routing import TransactionalRoute
+from app.api.deps import AdminUser, flush_or_400, get_or_404
+from app.api.schemas.common import LimitQuery, OffsetQuery, Page
 from app.api.schemas.user import UserIn, UserOut, UserUpdateIn
 from app.domain.models import User, UserRole
 from app.repository.user import UserRepository
 from app.services.auth import AuthService
-from app.services.password import hash_password
+from app.services.password import PasswordError, hash_password_async
 
-router = APIRouter(prefix="/users", route_class=DishkaRoute, tags=["users"])
+router = APIRouter(prefix="/users", route_class=TransactionalRoute, tags=["users"])
+
+
+async def _hash_or_400(password: str) -> str:
+    """Хеш пароля; нарушение политики (длина в байтах и т.п.) — 400, а не 500."""
+    try:
+        return await hash_password_async(password)
+    except PasswordError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
 
 @router.get("", response_model=Page[UserOut])
 async def list_users(
     _admin: FromDishka[AdminUser],
     repo: FromDishka[UserRepository],
-    limit: int = 50,
-    offset: int = 0,
+    limit: LimitQuery = 50,
+    offset: OffsetQuery = 0,
 ) -> Page[UserOut]:
     """Список пользователей."""
-    items = await repo.find(limit=limit, offset=offset)
+    items = await repo.find(limit=limit, offset=offset, order_by=User.id)
     total = await repo.count()
     return Page(
         items=[UserOut.model_validate(u) for u in items],
@@ -46,19 +54,14 @@ async def create_user(
         )
     user = User(
         username=data.username,
-        password_hash=hash_password(data.password),
+        password_hash=await _hash_or_400(data.password),
         role=data.role,
         telegram_id=data.telegram_id,
         is_active=data.is_active,
     )
-    try:
-        await repo.add(user)
-    except IntegrityError:
-        # гонка: username (или telegram_id) занят между проверкой и insert
-        await repo.session.rollback()
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Username or telegram_id already exists"
-        ) from None
+    repo.session.add(user)
+    # гонка: username (или telegram_id) занят между проверкой и insert
+    await flush_or_400(repo.session, "Username or telegram_id already exists")
     return UserOut.model_validate(user)
 
 
@@ -79,14 +82,27 @@ async def update_user(
     data: UserUpdateIn,
     admin: FromDishka[AdminUser],
     repo: FromDishka[UserRepository],
+    auth: FromDishka[AuthService],
 ) -> UserOut:
-    """Редактировать пользователя (пароль, роль, telegram_id, активность)."""
+    """Редактировать пользователя (пароль, роль, telegram_id, активность).
+
+    PATCH-семантика: отсутствующий ключ — не менять; ``telegram_id: null`` —
+    очистить (уведомления в Telegram отключаются).
+    """
     user = get_or_404(await repo.get(user_id), "User not found")
+    fields = data.model_fields_set
+    password_changed = False
     if data.password is not None:
-        user.password_hash = hash_password(data.password)
+        user.password_hash = await _hash_or_400(data.password)
+        password_changed = True
     if data.role is not None:
-        # нельзя понизить роль последнего активного admin
-        if user.role == UserRole.ADMIN and data.role != UserRole.ADMIN:
+        # нельзя понизить роль последнего активного admin (понижение
+        # неактивного admin на число активных не влияет)
+        if (
+            user.role == UserRole.ADMIN
+            and data.role != UserRole.ADMIN
+            and user.is_active
+        ):
             active_admins = await repo.count(
                 User.role == UserRole.ADMIN, User.is_active.is_(True)
             )
@@ -95,7 +111,7 @@ async def update_user(
                     status.HTTP_400_BAD_REQUEST, "Cannot demote the last admin"
                 )
         user.role = data.role
-    if data.telegram_id is not None:
+    if "telegram_id" in fields:
         user.telegram_id = data.telegram_id
     if data.is_active is not None:
         if user.id == admin.user.id and not data.is_active:
@@ -103,6 +119,14 @@ async def update_user(
                 status.HTTP_400_BAD_REQUEST, "Cannot deactivate yourself"
             )
         user.is_active = data.is_active
+    # telegram_id уникален — конфликт должен дать 400 до ответа, а не на commit
+    await flush_or_400(repo.session, "telegram_id already in use")
+    if password_changed:
+        # украденные токены (refresh и access) перестают работать сразу
+        await auth.revoke_all_for_user(user.id)
+    # updated_at (server onupdate) истёк после flush — перечитать до
+    # сериализации, иначе ленивая загрузка в async даёт MissingGreenlet
+    await repo.session.refresh(user)
     return UserOut.model_validate(user)
 
 

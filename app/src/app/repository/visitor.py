@@ -26,7 +26,14 @@ class VisitorRepository(BaseRepository[Visitor]):
         """Страница посетителей с поиском по ФИО и фильтром блокировки."""
         conditions = []
         if search:
-            conditions.append(Visitor.full_name.ilike(f"%{search}%"))
+            # % и _ — спецсимволы LIKE: экранируются, поиск идёт по подстроке.
+            # При росте таблицы (ведущий % — Seq Scan) — pg_trgm GIN-индекс по full_name.
+            escaped = (
+                search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
+            conditions.append(
+                Visitor.full_name.ilike(f"%{escaped}%", escape="\\")
+            )
         if is_blocked is not None:
             conditions.append(Visitor.is_blocked == is_blocked)
 

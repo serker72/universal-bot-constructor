@@ -13,8 +13,11 @@ class DbProvider(Provider):
     """Движок и фабрика сессий — синглтоны, сессия — на запрос."""
 
     @provide(scope=Scope.APP)
-    def provide_engine(self, settings: Settings) -> AsyncEngine:
-        return create_engine(settings)
+    async def provide_engine(self, settings: Settings) -> AsyncIterator[AsyncEngine]:
+        """Движок; при закрытии контейнера — dispose (пул соединений закрывается)."""
+        engine = create_engine(settings)
+        yield engine
+        await engine.dispose()
 
     @provide(scope=Scope.APP)
     def provide_session_factory(
@@ -26,7 +29,12 @@ class DbProvider(Provider):
     async def provide_session(
         self, factory: async_sessionmaker[AsyncSession]
     ) -> AsyncIterator[AsyncSession]:
-        """Сессия на запрос: commit при успехе, rollback при ошибке."""
+        """Сессия на запрос: commit при успехе, rollback при ошибке.
+
+        Финализатор — страховка: API коммитит до ответа (TransactionalRoute),
+        бот — до вызовов Telegram (CommitMiddleware). Здесь commit фиксирует
+        только то, что изменилось после них (обычно ничего).
+        """
         async with factory() as session:
             try:
                 yield session

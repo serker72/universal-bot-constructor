@@ -5,11 +5,12 @@
 """
 
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy.exc import IntegrityError
-from dishka.integrations.fastapi import DishkaRoute, FromDishka
+from dishka.integrations.fastapi import FromDishka
 
-from app.api.deps import AdminUser, get_or_404
-from app.api.schemas.common import Page
+from app.api.routing import TransactionalRoute
+from app.api.deps import AdminUser, flush_or_400, get_or_404
+from app.api.schemas.common import LimitQuery, OffsetQuery, Page
+from app.bot.dialogs.time_items import MINUTES_STEP
 from app.api.schemas.request_field import (
     CategoryFieldOut,
     CategoryFieldsIn,
@@ -19,25 +20,47 @@ from app.api.schemas.request_field import (
     RequestFieldUpdateIn,
 )
 from app.domain.models import RequestAvailableField, RequestFieldType
+from app.domain.models.request_field_value import VALUE_TEXT_MAX_LENGTH
 from app.repository.category import CategoryRepository
 from app.repository.request_field import RequestFieldRepository
 
 router = APIRouter(
-    prefix="/request-fields", route_class=DishkaRoute, tags=["request-fields"]
+    prefix="/request-fields", route_class=TransactionalRoute, tags=["request-fields"]
 )
+
+# Лимиты SELECT: Telegram показывает опции кнопками (текст кнопки — до 64
+# символов), значение пишется в value_text
+MAX_SELECT_OPTIONS = 50
+MAX_OPTION_LENGTH = 64
+
+
+def _bad_request(detail: str) -> HTTPException:
+    return HTTPException(status.HTTP_400_BAD_REQUEST, detail)
+
+
+def _is_number(value: object) -> bool:
+    """int/float, но не bool (bool — подкласс int в Python)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 # -- валидация meta_data по типу ---------------------------------------------
 
 
 def _validate_meta_data(field_type: RequestFieldType, meta_data: dict | None) -> None:
-    """Проверка параметров поля по типу (SELECT — options, TIME — minute_step)."""
+    """Проверка параметров поля по типу (значения типизированы, пустые запрещены).
+
+    - SELECT — options: непустой список непустых строк ≤ MAX_OPTION_LENGTH;
+    - TIME — minute_step: целое, делитель 60 (1..30);
+    - NUMBER — min/max: числа, min ≤ max;
+    - TEXT — max_length: целое 1..VALUE_TEXT_MAX_LENGTH (длина колонки value_text).
+    """
     if meta_data is None:
         if field_type == RequestFieldType.SELECT:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "SELECT-поле требует meta_data с непустым списком options",
-            )
+            raise _bad_request("SELECT-поле требует meta_data с непустым списком options")
         return
     if field_type == RequestFieldType.SELECT:
         options = meta_data.get("options")
@@ -46,16 +69,32 @@ def _validate_meta_data(field_type: RequestFieldType, meta_data: dict | None) ->
             or not options
             or not all(isinstance(o, str) and o.strip() for o in options)
         ):
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "meta_data.options — непустой список строк",
+            raise _bad_request("meta_data.options — непустой список строк")
+        if len(options) > MAX_SELECT_OPTIONS:
+            raise _bad_request(f"meta_data.options — не более {MAX_SELECT_OPTIONS} вариантов")
+        if any(len(o) > MAX_OPTION_LENGTH for o in options):
+            raise _bad_request(
+                f"meta_data.options — вариант не длиннее {MAX_OPTION_LENGTH} символов"
             )
+        if len({o.strip() for o in options}) != len(options):
+            raise _bad_request("meta_data.options — варианты не должны повторяться")
     if field_type == RequestFieldType.TIME:
-        step = meta_data.get("minute_step", 5)
-        if not isinstance(step, int) or not (1 <= step <= 30) or 60 % step != 0:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "meta_data.minute_step — делитель 60 (1..30)",
+        step = meta_data.get("minute_step", MINUTES_STEP)
+        if not _is_int(step) or not (1 <= step <= 30) or 60 % step != 0:
+            raise _bad_request("meta_data.minute_step — делитель 60 (1..30)")
+    if field_type == RequestFieldType.NUMBER:
+        minimum = meta_data.get("min")
+        maximum = meta_data.get("max")
+        for name, value in (("min", minimum), ("max", maximum)):
+            if value is not None and not _is_number(value):
+                raise _bad_request(f"meta_data.{name} — число")
+        if minimum is not None and maximum is not None and minimum > maximum:
+            raise _bad_request("meta_data.min не может быть больше max")
+    if field_type == RequestFieldType.TEXT and "max_length" in meta_data:
+        max_length = meta_data["max_length"]
+        if not _is_int(max_length) or not (1 <= max_length <= VALUE_TEXT_MAX_LENGTH):
+            raise _bad_request(
+                f"meta_data.max_length — целое число 1..{VALUE_TEXT_MAX_LENGTH}"
             )
 
 
@@ -66,8 +105,8 @@ def _validate_meta_data(field_type: RequestFieldType, meta_data: dict | None) ->
 async def list_fields(
     _admin: FromDishka[AdminUser],
     repo: FromDishka[RequestFieldRepository],
-    limit: int = 100,
-    offset: int = 0,
+    limit: LimitQuery = 100,
+    offset: OffsetQuery = 0,
 ) -> Page[RequestFieldOut]:
     """Список полей справочника."""
     items = await repo.find(limit=limit, offset=offset, order_by=RequestAvailableField.id)
@@ -89,7 +128,7 @@ async def create_field(
     """Создать поле справочника."""
     _validate_meta_data(data.type, data.meta_data)
     if await repo.get_by_code(data.code):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Code already exists")
+        raise _bad_request("Code already exists")
     field = RequestAvailableField(
         code=data.code,
         type=data.type,
@@ -97,13 +136,8 @@ async def create_field(
         is_required_default=data.is_required_default,
         meta_data=data.meta_data,
     )
-    try:
-        await repo.add(field)
-    except IntegrityError:
-        await repo.session.rollback()
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Code already exists"
-        ) from None
+    repo.session.add(field)
+    await flush_or_400(repo.session, "Code already exists")
     return RequestFieldOut.model_validate(field)
 
 
@@ -125,15 +159,19 @@ async def update_field(
     _admin: FromDishka[AdminUser],
     repo: FromDishka[RequestFieldRepository],
 ) -> RequestFieldOut:
-    """Обновить поле справочника (PATCH: только переданные поля)."""
+    """Обновить поле справочника (PATCH: только переданные поля).
+
+    ``meta_data: null`` — очистить параметры (ключ отсутствует — не менять).
+    """
     field = get_or_404(await repo.get(field_id), "Field not found")
+    fields = data.model_fields_set
     new_type = data.type if data.type is not None else field.type
-    new_meta = data.meta_data if data.meta_data is not None else field.meta_data
+    new_meta = data.meta_data if "meta_data" in fields else field.meta_data
     # тип менялся — meta_data валидируем заново с новым типом
     _validate_meta_data(new_type, new_meta)
     if data.code is not None and data.code != field.code:
         if await repo.get_by_code(data.code):
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Code already exists")
+            raise _bad_request("Code already exists")
         field.code = data.code
     if data.type is not None:
         field.type = data.type
@@ -141,8 +179,10 @@ async def update_field(
         field.label = data.label
     if data.is_required_default is not None:
         field.is_required_default = data.is_required_default
-    if data.meta_data is not None:
+    if "meta_data" in fields:
         field.meta_data = data.meta_data
+    await flush_or_400(repo.session, "Code already exists")
+    await repo.session.refresh(field)
     return RequestFieldOut.model_validate(field)
 
 
@@ -152,38 +192,26 @@ async def delete_field(
     _admin: FromDishka[AdminUser],
     repo: FromDishka[RequestFieldRepository],
 ) -> None:
-    """Удалить поле справочника (запрещено, если есть значения заявок — RESTRICT)."""
+    """Удалить поле справочника (запрещено, если есть значения заявок — RESTRICT).
+
+    Привязки поля к категориям удаляются каскадно (ON DELETE CASCADE).
+    """
     field = get_or_404(await repo.get(field_id), "Field not found")
     if await repo.count_request_values(field_id):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Field has request values and cannot be deleted",
-        )
-    try:
-        await repo.delete(field)
-        # session.delete() не выполняет flush — FK RESTRICT иначе всплывёт
-        # на commit после формирования ответа
-        await repo.session.flush()
-    except IntegrityError:
-        await repo.session.rollback()
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Field has request values and cannot be deleted",
-        ) from None
+        raise _bad_request("Field has request values and cannot be deleted")
+    await repo.delete(field)
+    # session.delete() не выполняет flush — FK RESTRICT иначе всплывёт
+    # на commit после формирования ответа
+    await flush_or_400(repo.session, "Field has request values and cannot be deleted")
 
 
 # -- привязка полей к категории ------------------------------------------------
 
 
-@router.get("/categories/{category_id}/fields", response_model=CategoryFieldsOut)
-async def get_category_fields(
-    category_id: int,
-    _admin: FromDishka[AdminUser],
-    categories: FromDishka[CategoryRepository],
-    repo: FromDishka[RequestFieldRepository],
+async def _category_fields_out(
+    category_id: int, repo: RequestFieldRepository
 ) -> CategoryFieldsOut:
-    """Состав полей формы заявки категории."""
-    get_or_404(await categories.get(category_id), "Category not found")
+    """Состав полей формы заявки категории (схема ответа)."""
     rows = await repo.list_category_fields(category_id)
     return CategoryFieldsOut(
         category_id=category_id,
@@ -196,6 +224,18 @@ async def get_category_fields(
             for link, f in rows
         ],
     )
+
+
+@router.get("/categories/{category_id}/fields", response_model=CategoryFieldsOut)
+async def get_category_fields(
+    category_id: int,
+    _admin: FromDishka[AdminUser],
+    categories: FromDishka[CategoryRepository],
+    repo: FromDishka[RequestFieldRepository],
+) -> CategoryFieldsOut:
+    """Состав полей формы заявки категории."""
+    get_or_404(await categories.get(category_id), "Category not found")
+    return await _category_fields_out(category_id, repo)
 
 
 @router.put("/categories/{category_id}/fields", response_model=CategoryFieldsOut)
@@ -211,37 +251,31 @@ async def set_category_fields(
     # все поля должны существовать (batch-запрос)
     target_ids = [link.field_id for link in data.fields]
     if len(set(target_ids)) != len(target_ids):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "Duplicate field_id in list"
-        )
+        raise _bad_request("Duplicate field_id in list")
     found = await repo.find(RequestAvailableField.id.in_(target_ids))
     found_ids = {f.id for f in found}
     missing = set(target_ids) - found_ids
     if missing:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            f"Field(s) not found: {', '.join(str(i) for i in sorted(missing))}",
+        raise _bad_request(
+            f"Field(s) not found: {', '.join(str(i) for i in sorted(missing))}"
         )
     # diff: удалить лишние, добавить/обновить переданные
-    current_ids = set(await repo.list_category_field_ids(category_id))
+    # (текущие привязки читаются один раз, а не на каждой итерации)
+    existing = {
+        link.field_id: link
+        for link, _f in await repo.list_category_fields(category_id)
+    }
     target_set = set(target_ids)
-    for field_id in current_ids - target_set:
+    for field_id in set(existing) - target_set:
         await repo.remove_category_field(category_id, field_id)
     for link in data.fields:
-        if link.field_id in target_set - current_ids:
+        current = existing.get(link.field_id)
+        if current is None:
             await repo.add_category_field(
                 category_id, link.field_id, link.sort_order, link.is_required
             )
         else:
-            # существующая привязка: обновить sort_order/is_required
-            rows = {
-                row.field_id: row
-                for row, _f in await repo.list_category_fields(category_id)
-            }
-            existing = rows.get(link.field_id)
-            if existing is not None:
-                existing.sort_order = link.sort_order
-                existing.is_required = link.is_required
-    return await get_category_fields(
-        category_id, _admin, categories, repo  # type: ignore[arg-type]
-    )
+            current.sort_order = link.sort_order
+            current.is_required = link.is_required
+    await repo.session.flush()
+    return await _category_fields_out(category_id, repo)

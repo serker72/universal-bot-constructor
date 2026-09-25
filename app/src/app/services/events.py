@@ -1,17 +1,23 @@
 """Издатель событий уведомлений (faststream + RabbitMQ).
 
-События публикуются в default exchange по routing_key;
-очереди привязываются на стороне потребителя (bot, см. app.bot.notifications).
-
-Routing keys и имена очередей задаются в .env (CONSUMER_ROUTING_*,
-CONSUMER_QUEUE_*) — издатель и потребитель должны использовать одинаковые
-значения, иначе сообщения возвращаются брокером (Basic.Return, unroutable).
+События публикуются в явный direct-exchange (CONSUMER_EXCHANGE) по routing
+key (CONSUMER_ROUTING_*); очереди (CONSUMER_QUEUE_*) привязываются к exchange
+теми же ключами на стороне потребителя (bot, см. app.bot.notifications).
+Имя очереди и routing key независимы: смена любого из них не теряет сообщения,
+пока издатель и потребитель читают одни и те же переменные.
 """
 
 from pydantic import BaseModel
-from faststream.rabbit import RabbitBroker
+from faststream.rabbit import ExchangeType, RabbitBroker, RabbitExchange
 
 from app.config.settings import Settings
+
+
+def notify_exchange(settings: Settings) -> RabbitExchange:
+    """Exchange уведомлений (общий для издателя и потребителя)."""
+    return RabbitExchange(
+        settings.consumer.exchange, type=ExchangeType.DIRECT, durable=True
+    )
 
 
 class VisitorRegisteredEvent(BaseModel):
@@ -53,22 +59,28 @@ class EventPublisher:
 
     def __init__(self, broker: RabbitBroker, settings: Settings) -> None:
         self.broker = broker
+        self.exchange = notify_exchange(settings)
         consumer = settings.consumer
         self.routing_registration = consumer.routing_registration
         self.routing_request_created = consumer.routing_request_created
         self.routing_request_cancelled = consumer.routing_request_cancelled
         self.routing_request_status = consumer.routing_request_status
 
+    async def _publish(self, event: BaseModel, routing_key: str) -> None:
+        await self.broker.publish(
+            event, routing_key=routing_key, exchange=self.exchange
+        )
+
     async def publish_visitor_registered(self, event: VisitorRegisteredEvent) -> None:
-        await self.broker.publish(event, routing_key=self.routing_registration)
+        await self._publish(event, self.routing_registration)
 
     async def publish_request_created(self, event: RequestCreatedEvent) -> None:
-        await self.broker.publish(event, routing_key=self.routing_request_created)
+        await self._publish(event, self.routing_request_created)
 
     async def publish_request_cancelled(self, event: RequestCancelledEvent) -> None:
-        await self.broker.publish(event, routing_key=self.routing_request_cancelled)
+        await self._publish(event, self.routing_request_cancelled)
 
     async def publish_request_status_changed(
         self, event: RequestStatusChangedEvent
     ) -> None:
-        await self.broker.publish(event, routing_key=self.routing_request_status)
+        await self._publish(event, self.routing_request_status)

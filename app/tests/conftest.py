@@ -29,6 +29,16 @@ def pytest_collection_modifyitems(items):
             item.add_marker(pytest.mark.unit)
 
 
+@pytest.fixture(autouse=True)
+def _clear_app_settings_cache():
+    """Кеш системных настроек процесса не должен перетекать между тестами."""
+    from app.services.app_settings import clear_cache
+
+    clear_cache()
+    yield
+    clear_cache()
+
+
 @pytest.fixture
 def settings(tmp_path, monkeypatch) -> Settings:
     """Настройки приложения для unit-тестов."""

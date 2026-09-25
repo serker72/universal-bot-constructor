@@ -1,6 +1,6 @@
 """Объекты меню бота (элементы категорий)."""
 
-from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy import ForeignKey, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.base import Base, TimestampMixin
@@ -18,10 +18,21 @@ class Object(Base, TimestampMixin):
         index=True,
     )
     name: Mapped[str] = mapped_column(nullable=False)
-    short_description: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    pdf_path: Mapped[str] = mapped_column(String(512), nullable=False, default="")
-    sort_order: Mapped[int] = mapped_column(default=0, nullable=False)
-    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    short_description: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=text("''")
+    )
+    pdf_path: Mapped[str] = mapped_column(
+        String(512), nullable=False, default="", server_default=text("''")
+    )
+    # file_id PDF в Telegram (повторная отправка без загрузки файла);
+    # сбрасывается при замене PDF
+    telegram_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sort_order: Mapped[int] = mapped_column(
+        default=0, server_default=text("0"), nullable=False, index=True
+    )
+    is_active: Mapped[bool] = mapped_column(
+        default=True, server_default=text("true"), nullable=False
+    )
 
     category: Mapped["Category"] = relationship(back_populates="objects")
     managers: Mapped[list["User"]] = relationship(

@@ -13,6 +13,7 @@
 import re
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from pydantic import Field, model_validator
@@ -20,6 +21,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Секрет webhook (setWebhook.secret_token): 1–256 символов A-Z, a-z, 0-9, _ и -
 WEBHOOK_SECRET_RE = re.compile(r"[A-Za-z0-9_-]{1,256}")
+
+def _q(value: str) -> str:
+    """URL-экранирование части DSN (пароль с / + @ : не ломает разбор URL)."""
+    return quote(value, safe="")
+
 
 # Корень проекта: app/src/app/config/settings.py -> parents[4]
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -42,7 +48,6 @@ class ProjectSettings(BaseSettings):
     environment: Literal["loc", "prod"] = "loc"
     url_scheme: str = "http"          # http / https
     domain: str = "localhost"
-    data_dir: Path = Path("/data/universal-bot-constructor")
 
 
 # ---------------------------------------------------------------------------
@@ -59,8 +64,6 @@ class PostgresSettings(BaseSettings):
     db: str = "universal_bot_constructor"
     user: str = "universal_bot_constructor"
     password: str = ""
-    data_dir: Path = Path("/data/universal-bot-constructor/db")
-    backups_dir: Path = Path("/data/universal-bot-constructor/backups")
 
     # Тестовая БД
     test_db: str = "universal_bot_constructor_test"
@@ -69,9 +72,9 @@ class PostgresSettings(BaseSettings):
 
     @property
     def url(self) -> str:
-        """DSN для SQLAlchemy (asyncpg)."""
+        """DSN для SQLAlchemy (asyncpg); учётные данные URL-экранируются."""
         return (
-            f"postgresql+asyncpg://{self.user}:{self.password}"
+            f"postgresql+asyncpg://{_q(self.user)}:{_q(self.password)}"
             f"@{self.host}:{self.port}/{self.db}"
         )
 
@@ -79,7 +82,7 @@ class PostgresSettings(BaseSettings):
     def test_url(self) -> str:
         """DSN для тестовой БД."""
         return (
-            f"postgresql+asyncpg://{self.test_user}:{self.test_password}"
+            f"postgresql+asyncpg://{_q(self.test_user)}:{_q(self.test_password)}"
             f"@{self.host}:{self.port}/{self.test_db}"
         )
 
@@ -94,8 +97,10 @@ class SqlalchemySettings(BaseSettings):
     )
 
     debug: bool = False
-    pool_size: int = 50
-    max_overflow: int = -1
+    # Пул поверх pgbouncer (pool_mode=transaction): ограниченный overflow —
+    # без него (-1) число клиентских соединений не ограничено
+    pool_size: int = 20
+    max_overflow: int = 10
     pool_recycle: int = 600
     pool_use_lifo: bool = False
     pool_pre_ping: bool = True
@@ -115,12 +120,16 @@ class RedisSettings(BaseSettings):
     db: int = 0
     username: str | None = None
     password: str = ""
-    data_dir: Path = Path("/data/universal-bot-constructor/redis")
 
     @property
     def url(self) -> str:
-        """DSN для redis-py / aiogram."""
-        auth = f":{self.password}@" if self.password else ""
+        """DSN для redis-py / aiogram (username — ACL Redis 6+, опционально)."""
+        if self.password:
+            auth = f"{_q(self.username or '')}:{_q(self.password)}@"
+        elif self.username:
+            auth = f"{_q(self.username)}@"
+        else:
+            auth = ""
         return f"redis://{auth}{self.host}:{self.port}/{self.db}"
 
 
@@ -136,17 +145,17 @@ class RabbitmqSettings(BaseSettings):
     host: str = "rabbitmq"
     port: int = 5672
     management_port: int = 15672
+    # guest/guest — только для разработки; в prod — fail-fast (см. Settings)
     username: str = "guest"
     password: str = "guest"
     vhost: str = "/"
-    data_dir: Path = Path("/data/universal-bot-constructor/rabbitmq")
 
     @property
     def url(self) -> str:
-        """AMQP DSN для faststream."""
+        """AMQP DSN для faststream (vhost "/" кодируется как %2F)."""
         return (
-            f"amqp://{self.username}:{self.password}"
-            f"@{self.host}:{self.port}/{self.vhost}"
+            f"amqp://{_q(self.username)}:{_q(self.password)}"
+            f"@{self.host}:{self.port}/{_q(self.vhost)}"
         )
 
 
@@ -191,13 +200,18 @@ class ConsumerSettings(BaseSettings):
         extra="ignore",
     )
 
+    # Exchange уведомлений (direct): издатель публикует в него по routing key,
+    # очереди привязываются к нему теми же ключами (имя очереди и routing
+    # key независимы)
+    exchange: str = "bot.notify"
+
     # Имена очередей уведомлений (консьюмеры бота, см. app.bot.notifications)
     queue_registration: str = "bot.notify.registration"
     queue_request_created: str = "bot.notify.request.created"
     queue_request_cancelled: str = "bot.notify.request.cancelled"
     queue_request_status: str = "bot.notify.request.status"
 
-    # Routing keys издателя (должны совпадать с привязкой очередей!)
+    # Routing keys: издатель и привязка очередей используют одни и те же значения
     routing_registration: str = "bot.notify.registration"
     routing_request_created: str = "bot.notify.request.created"
     routing_request_cancelled: str = "bot.notify.request.cancelled"
@@ -239,32 +253,6 @@ class CorsSettings(BaseSettings):
 
 
 # ---------------------------------------------------------------------------
-# Frontend / Nuxt.js (префикс FRONTEND_)
-# ---------------------------------------------------------------------------
-class FrontendSettings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="FRONTEND_",
-        extra="ignore",
-    )
-
-    port: int = 3000
-    host: str = "0.0.0.0"
-
-
-# ---------------------------------------------------------------------------
-# Nginx (префикс NGINX_)
-# ---------------------------------------------------------------------------
-class NginxSettings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="NGINX_",
-        extra="ignore",
-    )
-
-    port: int = 80
-    ssl_port: int = 443
-
-
-# ---------------------------------------------------------------------------
 # Единый класс-агрегатор
 # ---------------------------------------------------------------------------
 class Settings(BaseSettings):
@@ -285,8 +273,6 @@ class Settings(BaseSettings):
     consumer: ConsumerSettings = Field(default_factory=ConsumerSettings)
     bot: BotSettings = Field(default_factory=BotSettings)
     cors: CorsSettings = Field(default_factory=CorsSettings)
-    frontend: FrontendSettings = Field(default_factory=FrontendSettings)
-    nginx: NginxSettings = Field(default_factory=NginxSettings)
 
     @model_validator(mode="after")
     def _validate_security(self) -> "Settings":
@@ -311,6 +297,17 @@ class Settings(BaseSettings):
             raise ValueError("BACKEND_JWT_SECRET в prod должен быть >= 32 байт")
         if self.backend.cookie_secure is None:
             self.backend.cookie_secure = self.project.url_scheme == "https"
+
+        if self.project.environment == "prod":
+            # дефолты для разработки в prod недопустимы
+            if self.rabbitmq.password in ("", "guest"):
+                raise ValueError(
+                    "RABBITMQ_PASSWORD в prod не может быть пустым или guest"
+                )
+            if any("localhost" in origin for origin in self.cors.origins):
+                raise ValueError(
+                    "CORS_ORIGINS в prod не должен содержать localhost"
+                )
 
         secret = self.bot.webhook_secret
         if secret and not WEBHOOK_SECRET_RE.fullmatch(secret):

@@ -16,7 +16,8 @@ class UserRepository(BaseRepository[User]):
         return await self.find_one(User.username == username)
 
     async def get_by_telegram_id(self, telegram_id: int) -> User | None:
-        """Пользователь по привязанному telegram_id (для уведомлений)."""
+        """Пользователь по привязанному telegram_id (уведомления используют
+        list_telegram_ids_by_*)."""
         return await self.find_one(User.telegram_id == telegram_id)
 
     async def list_by_ids(self, user_ids: Sequence[int]) -> Sequence[User]:

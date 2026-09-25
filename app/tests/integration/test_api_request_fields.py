@@ -1,5 +1,8 @@
 """Интеграционные тесты API полей заявки (справочник + привязки категорий)."""
 
+import pytest
+
+
 from tests.integration.conftest import API
 
 
@@ -168,3 +171,47 @@ async def test_replace_category_fields_removes_old(
 async def test_category_fields_missing_category_404(admin_client):
     resp = await admin_client.get(f"{API}/request-fields/categories/9999/fields")
     assert resp.status_code == 404
+
+
+async def test_delete_field_linked_to_category(admin_client, category_with_fields, field_text):
+    """Поле, привязанное к категории (без значений заявок), удаляется каскадно."""
+    resp = await admin_client.delete(f"{API}/request-fields/{field_text.id}")
+    assert resp.status_code == 204
+    resp = await admin_client.get(
+        f"{API}/request-fields/categories/{category_with_fields.id}/fields"
+    )
+    ids = [f["field"]["id"] for f in resp.json()["fields"]]
+    assert field_text.id not in ids
+
+
+@pytest.mark.parametrize(
+    ("field_type", "meta"),
+    [
+        ("number", {"min": ""}),
+        ("number", {"min": 5, "max": 1}),
+        ("number", {"max": "10"}),
+        ("text", {"max_length": ""}),
+        ("text", {"max_length": 5000}),
+        ("time", {"minute_step": True}),
+        ("select", {"options": ["x" * 65]}),
+    ],
+)
+async def test_meta_data_types_validated_400(admin_client, field_type, meta):
+    resp = await admin_client.post(
+        f"{API}/request-fields",
+        json={"code": "bad_meta", "type": field_type, "label": "L", "meta_data": meta},
+    )
+    assert resp.status_code == 400
+
+
+async def test_patch_meta_data_null_clears(admin_client, field_text):
+    resp = await admin_client.patch(
+        f"{API}/request-fields/{field_text.id}", json={"meta_data": None}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["meta_data"] is None
+    # ключ отсутствует — не менять
+    resp = await admin_client.patch(
+        f"{API}/request-fields/{field_text.id}", json={"label": "X"}
+    )
+    assert resp.json()["meta_data"] is None

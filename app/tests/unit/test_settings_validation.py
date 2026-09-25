@@ -16,6 +16,8 @@ def _base_env(monkeypatch, tmp_path):
     monkeypatch.setenv("PROJECT_ENVIRONMENT", "loc")
     monkeypatch.setenv("BOT_WEBHOOK_BASE_URL", "")
     monkeypatch.setenv("BOT_WEBHOOK_SECRET", "")
+    monkeypatch.setenv("RABBITMQ_PASSWORD", "unit-test-rabbit-password")
+    monkeypatch.setenv("CORS_ORIGINS", '["https://example.org"]')
 
 
 @pytest.mark.parametrize("env", ["loc", "prod"])
@@ -76,3 +78,33 @@ def test_webhook_secret_format_rejected(monkeypatch, secret):
 def test_webhook_secret_format_ok(monkeypatch, secret):
     monkeypatch.setenv("BOT_WEBHOOK_SECRET", secret)
     assert Settings().bot.webhook_secret == secret
+
+
+def test_prod_rejects_guest_rabbitmq_password(monkeypatch):
+    monkeypatch.setenv("PROJECT_ENVIRONMENT", "prod")
+    monkeypatch.setenv("RABBITMQ_PASSWORD", "guest")
+    with pytest.raises(ValidationError, match="RABBITMQ_PASSWORD"):
+        Settings()
+
+
+def test_prod_rejects_localhost_cors(monkeypatch):
+    monkeypatch.setenv("PROJECT_ENVIRONMENT", "prod")
+    monkeypatch.setenv("CORS_ORIGINS", '["http://localhost:3000"]')
+    with pytest.raises(ValidationError, match="CORS_ORIGINS"):
+        Settings()
+
+
+def test_dsn_credentials_are_url_quoted(monkeypatch):
+    """Пароли с / + @ : не ломают DSN; REDIS_USERNAME попадает в URL."""
+    from sqlalchemy.engine import make_url
+
+    password = "p@ss/w:rd+1"
+    monkeypatch.setenv("POSTGRES_PASSWORD", password)
+    monkeypatch.setenv("REDIS_PASSWORD", password)
+    monkeypatch.setenv("REDIS_USERNAME", "ubc")
+    monkeypatch.setenv("RABBITMQ_PASSWORD", password)
+    monkeypatch.setenv("RABBITMQ_VHOST", "/")
+    settings = Settings()
+    assert make_url(settings.postgres.url).password == password
+    assert settings.redis.url.startswith("redis://ubc:p%40ss%2Fw%3Ard%2B1@")
+    assert settings.rabbitmq.url.endswith("/%2F")

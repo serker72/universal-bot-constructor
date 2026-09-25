@@ -13,6 +13,7 @@ class VisitorOut(BaseModel):
     id: int
     telegram_id: int
     full_name: str
+    phone: str | None
     consent_given: bool
     consent_at: datetime | None
     is_blocked: bool

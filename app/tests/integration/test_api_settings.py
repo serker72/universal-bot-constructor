@@ -70,3 +70,29 @@ async def test_removed_request_flags_rejected(admin_client):
     )
     assert resp.status_code == 400
     assert "is_use_time_in_request" in resp.json()["detail"]
+
+
+async def test_update_invalid_values_400(admin_client):
+    """Недопустимые значения не сохраняются (page_size вне 1..50, пустой интервал)."""
+    from app.services.app_settings import KEY_CANCEL_INTERVAL_MINUTES
+
+    for payload in (
+        {KEY_PAGE_SIZE: "500"},
+        {KEY_PAGE_SIZE: "abc"},
+        {KEY_CANCEL_INTERVAL_MINUTES: "-5"},
+        {KEY_CANCEL_INTERVAL_MINUTES: ""},
+    ):
+        resp = await admin_client.put(f"{API}/settings", json={"settings": payload})
+        assert resp.status_code == 400, payload
+    resp = await admin_client.get(f"{API}/settings")
+    assert resp.json() == {"settings": {}}
+
+
+async def test_foreign_origin_rejected_403(admin_client):
+    """Мутирующий запрос с чужим Origin (cookie-аутентификация, CSRF) — 403."""
+    resp = await admin_client.put(
+        f"{API}/settings",
+        json={"settings": {KEY_PAGE_SIZE: "5"}},
+        headers={"Origin": "https://evil.example.org"},
+    )
+    assert resp.status_code == 403

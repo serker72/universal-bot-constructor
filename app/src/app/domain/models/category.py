@@ -18,8 +18,12 @@ class Category(Base, TimestampMixin):
     button_text: Mapped[str | None] = mapped_column(
         sa.String(64), nullable=True, default=None
     )
-    sort_order: Mapped[int] = mapped_column(default=0, nullable=False)
-    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(
+        default=0, server_default=sa.text("0"), nullable=False, index=True
+    )
+    is_active: Mapped[bool] = mapped_column(
+        default=True, server_default=sa.text("true"), nullable=False
+    )
 
     objects: Mapped[list["Object"]] = relationship(
         back_populates="category",

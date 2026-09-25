@@ -21,7 +21,10 @@ class RequestFieldIn(BaseModel):
 
 
 class RequestFieldUpdateIn(BaseModel):
-    """Обновление поля справочника (PATCH: все поля опциональны)."""
+    """Обновление поля справочника (PATCH: все поля опциональны).
+
+    ``meta_data``: ключ не передан — не менять, ``null`` — очистить.
+    """
 
     code: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
     type: RequestFieldType | None = None

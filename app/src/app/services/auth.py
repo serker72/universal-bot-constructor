@@ -1,7 +1,10 @@
 """Сервис аутентификации: login, refresh, logout, отзыв сессий.
 
 Токены выдаются в httpOnly cookies на каждое устройство (device_id из thumbmarkjs).
-При logout/отзыве оба токена заносятся в blacklist в Redis с TTL до истечения.
+Access и refresh содержат sid — id сессии: отзыв сессии (logout, отзыв админом,
+смена пароля) сразу делает недействительными оба токена (проверка в
+AuthProvider.provide_current_user). Дополнительно при logout/отзыве jti
+заносятся в blacklist в Redis с TTL до истечения.
 """
 
 from datetime import datetime, timezone
@@ -15,7 +18,7 @@ from app.log import get_logger
 from app.repository.device import DeviceRepository
 from app.repository.session import SessionRepository
 from app.repository.user import UserRepository
-from app.services.password import verify_password
+from app.services.password import verify_password_async
 from app.services.security import TokenBlacklist
 from app.services.tokens import (
     TOKEN_TYPE_ACCESS,
@@ -26,6 +29,10 @@ from app.services.tokens import (
 
 ACCESS_COOKIE = "ubc_access"
 REFRESH_COOKIE = "ubc_refresh"
+
+# Окно, в течение которого повтор только что ротированного refresh считается
+# параллельным запросом вкладок (401 без отзыва), а не повтором украденного токена
+REFRESH_REUSE_GRACE_SECONDS = 30
 
 log = get_logger(__name__)
 
@@ -108,9 +115,12 @@ class AuthService:
     ) -> User:
         """Вход: проверка пароля, регистрация устройства, выдача токенов."""
         user = await self.users.get_by_username(username)
-        if user is None or not user.is_active:
-            raise AuthError("invalid credentials")
-        if not verify_password(password, user.password_hash):
+        # bcrypt выполняется всегда (и для несуществующего пользователя) —
+        # время ответа не раскрывает существование username
+        password_ok = await verify_password_async(
+            password, user.password_hash if user is not None else None
+        )
+        if user is None or not user.is_active or not password_ok:
             raise AuthError("invalid credentials")
 
         now = datetime.now(timezone.utc)
@@ -128,21 +138,32 @@ class AuthService:
             device.user_agent = user_agent or device.user_agent
             await self.devices.touch(device)
 
-        pair = self.tokens.create_pair(user_id=user.id, role=user.role.value)
-        await self.sessions.add(
+        # сессия создаётся до токенов: её id попадает в claim sid
+        refresh_jti = self.tokens.new_jti()
+        session = await self.sessions.add(
             Session(
                 device_id=device.id,
                 user_id=user.id,
-                refresh_token_jti=pair.refresh_jti,
+                refresh_token_jti=refresh_jti,
                 is_active=True,
                 created_at=now,
             )
+        )
+        pair = self.tokens.create_pair(
+            user_id=user.id,
+            role=user.role.value,
+            session_id=session.id,
+            refresh_jti=refresh_jti,
         )
         self._set_cookies(response, pair)
         return user
 
     async def refresh(self, refresh_token: str | None, response: Response) -> None:
-        """Обновить пару токенов (ротация refresh, отзыв старых токенов)."""
+        """Обновить пару токенов (ротация refresh, отзыв старых токенов).
+
+        Повторное использование уже ротированного refresh (вне короткого окна
+        параллельных запросов) — признак кражи токена: отзывается вся сессия.
+        """
         if not refresh_token:
             raise AuthError("no refresh token")
         try:
@@ -151,21 +172,38 @@ class AuthService:
             raise AuthError("invalid refresh token") from exc
 
         jti = payload["jti"]
-        session = await self.sessions.get_by_jti(jti)
+        sid = payload.get("sid")
+        if sid is not None:
+            # блокировка строки: параллельные refresh ротируют сессию по очереди
+            session = await self.sessions.get_for_update(int(sid))
+        else:
+            session = await self.sessions.get_by_jti(jti)
         if session is None or not session.is_active:
             raise AuthError("session revoked")
+        if session.refresh_token_jti != jti:
+            if await self.blacklist.is_recently_rotated(jti):
+                # параллельный refresh (вкладки/запросы) — новый токен уже выдан
+                raise AuthError("refresh token already rotated")
+            log.warning(
+                "refresh_token_reuse_detected",
+                session_id=session.id,
+                user_id=session.user_id,
+            )
+            await self.revoke_session(session)
+            raise AuthError("refresh token reuse detected")
 
         user = await self.users.get(int(payload["sub"]))
         if user is None or not user.is_active:
             raise AuthError("user inactive")
 
-        # Отозвать старые токены (refresh до конца TTL, access — по exp из payload)
+        # Отозвать старый refresh до конца его TTL
         exp = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
-        await self.blacklist.add(
-            jti, self.tokens.remaining_ttl(exp)
-        )
+        await self.blacklist.add(jti, self.tokens.remaining_ttl(exp))
+        await self.blacklist.mark_rotated(jti, REFRESH_REUSE_GRACE_SECONDS)
 
-        pair = self.tokens.create_pair(user_id=user.id, role=user.role.value)
+        pair = self.tokens.create_pair(
+            user_id=user.id, role=user.role.value, session_id=session.id
+        )
         # Ротация: сессия продолжает жить с новым jti refresh
         session.refresh_token_jti = pair.refresh_jti
         self._set_cookies(response, pair)
@@ -202,7 +240,11 @@ class AuthService:
         self._clear_cookies(response)
 
     async def revoke_session(self, session: Session) -> None:
-        """Отозвать одну сессию: refresh-токен в blacklist."""
+        """Отозвать одну сессию: refresh-токен в blacklist.
+
+        Access-токены сессии перестают приниматься сразу — AuthProvider
+        проверяет активность сессии по claim sid.
+        """
         await self.sessions.revoke(session)
         # exp не хранится в БД — берём максимальный срок refresh
         backend = self.settings.backend
@@ -214,6 +256,7 @@ class AuthService:
     async def revoke_all_for_user(self, user_id: int) -> int:
         """Отозвать все активные сессии пользователя (refresh-jti в blacklist).
 
+        Используется при удалении пользователя и смене пароля.
         Возвращает количество отозванных сессий.
         """
         active, _total = await self.sessions.list_by_user(
@@ -222,14 +265,16 @@ class AuthService:
         backend = self.settings.backend
         ttl = backend.refresh_token_expire_days * 24 * 3600
         # одним pipeline вместо N round-trip'ов; если Redis недоступен —
-        # сессии отзываются в БД (refresh не работает), но уже выданные
-        # access-токены живут до своего exp — логируем и продолжаем
+        # сессии отзываются в БД: refresh не работает, access отклоняется
+        # по неактивной сессии (claim sid) — логируем и продолжаем
         try:
             await self.blacklist.add_many(
                 [(s.refresh_token_jti, ttl) for s in active]
             )
         except Exception:
             log.error(
-                "blacklist_unavailable_on_revoke_all", user_id=user_id
+                "blacklist_unavailable_on_revoke_all",
+                user_id=user_id,
+                exc_info=True,
             )
         return await self.sessions.revoke_all_for_user(user_id)

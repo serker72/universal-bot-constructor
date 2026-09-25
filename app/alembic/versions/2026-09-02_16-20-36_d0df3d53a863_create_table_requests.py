@@ -11,7 +11,17 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-from app.domain.models.request import RequestStatus
+import enum
+
+
+# Замороженная копия enum на момент миграции: изменения app.domain.models
+# не должны менять историю схемы
+class RequestStatus(str, enum.Enum):
+    NEW = "new"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    COMPLETED = "completed"
+    CANCELLED_BY_CUSTOMER = "cancelled_by_customer"
 
 # revision identifiers, used by Alembic.
 revision: str = "d0df3d53a863"

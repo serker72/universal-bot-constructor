@@ -11,17 +11,21 @@ class UserIn(BaseModel):
     """Создание пользователя."""
 
     username: str = Field(min_length=3, max_length=255)
-    # bcrypt использует только первые 72 байта пароля
-    password: str = Field(min_length=8, max_length=72)
+    # политика (длина в символах и байтах, частые пароли) — validate_password_policy;
+    # max_length в символах с запасом: байтовый лимит bcrypt (72) проверяется отдельно
+    password: str = Field(min_length=10, max_length=72)
     role: UserRole = UserRole.MANAGER
     telegram_id: int | None = None
     is_active: bool = True
 
 
 class UserUpdateIn(BaseModel):
-    """Редактирование пользователя (все поля опциональны)."""
+    """Редактирование пользователя (все поля опциональны).
 
-    password: str | None = Field(default=None, min_length=8, max_length=72)
+    ``telegram_id``: ключ не передан — не менять, ``null`` — очистить.
+    """
+
+    password: str | None = Field(default=None, min_length=10, max_length=72)
     role: UserRole | None = None
     telegram_id: int | None = None
     is_active: bool | None = None

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.domain.base import Base, TimestampMixin
+
+# Длина колонки value_text: ограничения полей (TEXT max_length, опции SELECT)
+# валидируются против неё в API (_validate_meta_data)
+VALUE_TEXT_MAX_LENGTH = 1024
 
 
 class RequestField(Base, TimestampMixin):
@@ -13,7 +17,12 @@ class RequestField(Base, TimestampMixin):
 
     __tablename__ = "request_fields"
     __table_args__ = (
-        UniqueConstraint("request_id", "field_id", name="uq_request_fields_request_id_field_id"),
+        Index(
+            "uq_request_fields_request_id_field_id",
+            "request_id",
+            "field_id",
+            unique=True,
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -27,7 +36,9 @@ class RequestField(Base, TimestampMixin):
         nullable=False,
         index=True,
     )
-    value_text: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    value_text: Mapped[str | None] = mapped_column(
+        String(VALUE_TEXT_MAX_LENGTH), nullable=True
+    )
 
     field: Mapped["RequestAvailableField"] = relationship()
     request: Mapped["Request"] = relationship(back_populates="values")

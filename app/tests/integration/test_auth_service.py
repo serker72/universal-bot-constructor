@@ -279,3 +279,61 @@ async def test_revoke_all_for_user(service: AuthService, user: User, db, auth_da
 
     sessions, _total = await SessionRepository(db).list_by_user(user.id)
     assert all(s.is_active is False for s in sessions)
+
+
+async def test_refresh_reuse_revokes_session(
+    service: AuthService, user: User, db, auth_data, device_id, redis_client: Redis
+):
+    """Повтор уже ротированного refresh (вне окна параллельных запросов) —
+    признак кражи: вся сессия отзывается."""
+    login_response = make_response()
+    await service.login(
+        username=auth_data["username"],
+        password=auth_data["password"],
+        device_id=device_id,
+        user_agent=None,
+        response=login_response,
+    )
+    await db.commit()
+    old_refresh = get_cookie(login_response, REFRESH_COOKIE)
+    old_jti = service.tokens.decode_refresh(old_refresh)["jti"]
+
+    refresh_response = make_response()
+    await service.refresh(old_refresh, refresh_response)
+    await db.commit()
+    new_refresh = get_cookie(refresh_response, REFRESH_COOKIE)
+
+    # в окне параллельных refresh — 401 без отзыва сессии
+    with pytest.raises(AuthError, match="already rotated"):
+        await service.refresh(old_refresh, make_response())
+    await db.rollback()
+
+    # окно истекло — повтор старого токена отзывает сессию
+    await redis_client.delete(f"auth:rotated:{old_jti}")
+    with pytest.raises(AuthError, match="reuse"):
+        await service.refresh(old_refresh, make_response())
+    await db.commit()
+    with pytest.raises(AuthError, match="revoked"):
+        await service.refresh(new_refresh, make_response())
+
+
+async def test_login_unknown_user_runs_bcrypt(service: AuthService, monkeypatch, device_id):
+    """Для несуществующего пользователя пароль тоже проверяется (тайминг)."""
+    import app.services.auth as auth_mod
+
+    calls: list = []
+
+    async def fake_verify(password, password_hash):
+        calls.append(password_hash)
+        return False
+
+    monkeypatch.setattr(auth_mod, "verify_password_async", fake_verify)
+    with pytest.raises(AuthError):
+        await service.login(
+            username="no-such-user",
+            password="whatever-123",
+            device_id=device_id,
+            user_agent=None,
+            response=make_response(),
+        )
+    assert calls == [None]

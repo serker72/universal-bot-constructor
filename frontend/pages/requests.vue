@@ -8,11 +8,9 @@
         <label class="label" for="f-status">Статус</label>
         <select id="f-status" v-model="filters.status" class="input" @change="changeOffset(0)">
           <option value="">Все</option>
-          <option value="new">Новые</option>
-          <option value="approved">Подтверждённые</option>
-          <option value="rejected">Отклонённые</option>
-          <option value="completed">Выполненные</option>
-          <option value="cancelled_by_customer">Отменённые</option>
+          <option v-for="s in REQUEST_STATUSES" :key="s" :value="s">
+            {{ REQUEST_STATUS_LABELS[s] }}
+          </option>
         </select>
       </div>
       <div>
@@ -96,35 +94,14 @@
           </tr>
         </tbody>
       </table>
-      <div class="px-4 pb-4">
-        <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
-      </div>
+      <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-interface ReqField {
-  field_id: number
-  field_code: string
-  field_label: string
-  value: string | null
-}
-interface Req {
-  id: number
-  visitor_id: number
-  object_id: number
-  phone: string
-  fields: ReqField[]
-  status: string
-  confirmed_at: string | null
-  created_at: string
-  updated_at: string
-}
-interface Obj {
-  id: number
-  name: string
-}
+import type { Obj, Request } from '~/types/models'
+import { REQUEST_STATUSES, REQUEST_STATUS_LABELS } from '~/types/models'
 
 const auth = useAuth()
 const route = useRoute()
@@ -143,22 +120,22 @@ function nextDay(value: string): string {
   return d.toISOString().slice(0, 10)
 }
 
-const { items, total, offset, load, changeOffset: goTo } = useListLoader<Req>((off, signal) => {
+const { items, total, offset, load, changeOffset: goTo } = useListLoader<Request>((off, signal) => {
   const params: Record<string, unknown> = { limit, offset: off }
   if (filters.value.status) params.status_filter = filters.value.status
   if (filters.value.objectId) params.object_id = filters.value.objectId
   // границы дня по Москве; «по» — исключающая: < 00:00 следующего дня
   if (filters.value.dateFrom) params.date_from = moscowToUtc(`${filters.value.dateFrom}T00:00`)
   if (filters.value.dateTo) params.date_to = moscowToUtc(`${nextDay(filters.value.dateTo)}T00:00`)
-  return page<Req>('/requests', params, signal)
+  return page<Request>('/requests', params, signal)
 }, limit)
 
 function objectName(id: number): string {
-  return objects.value.find((o) => o.id === id)?.name ?? `#${id}`
+  return nameById(objects.value, id)
 }
 
 /** Обработка доступна только менеджеру объекта: new → approved/rejected, approved → completed */
-function canProcess(req: Req): boolean {
+function canProcess(req: Request): boolean {
   if (!auth.isAdmin.value) {
     return req.status === 'new' || req.status === 'approved'
   }
@@ -174,7 +151,7 @@ function resetFilters() {
   changeOffset(0)
 }
 
-async function setStatus(req: Req, status: string) {
+async function setStatus(req: Request, status: string) {
   const verb = status === 'approved' ? 'подтвердить' : status === 'rejected' ? 'отклонить' : 'пометить выполненной'
   if (!confirm(`${verb.charAt(0).toUpperCase() + verb.slice(1)} заявку #${req.id}?`)) return
   busyId.value = req.id
@@ -191,7 +168,7 @@ async function setStatus(req: Req, status: string) {
 onMounted(async () => {
   // deep-link из дашборда: ?status=new — предустановить фильтр статуса
   const qs = route.query.status
-  if (typeof qs === 'string' && ['new', 'approved', 'rejected', 'completed', 'cancelled_by_customer'].includes(qs)) {
+  if (typeof qs === 'string' && (REQUEST_STATUSES as readonly string[]).includes(qs)) {
     filters.value.status = qs
   }
   await load().catch((err) => showLoadError(err, '[requests]'))

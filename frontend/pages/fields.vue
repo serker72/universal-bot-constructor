@@ -104,33 +104,21 @@
 </template>
 
 <script setup lang="ts">
-interface Field {
-  id: number
-  code: string
-  type: 'text' | 'number' | 'date' | 'time' | 'select'
-  label: string
-  is_required_default: boolean
-  meta_data: Record<string, unknown> | null
-}
+import type { FieldDef, FieldType } from '~/types/models'
+import { FIELD_TYPE_LABELS } from '~/types/models'
 
-const TYPE_LABELS: Record<string, string> = {
-  text: 'Текст',
-  number: 'Число',
-  date: 'Дата',
-  time: 'Время (часы и минуты)',
-  select: 'Выбор из вариантов',
-}
+const TYPE_LABELS = FIELD_TYPE_LABELS
 
 const { api, pageAll } = useApi()
 
-const items = ref<Field[]>([])
+const items = ref<FieldDef[]>([])
 const modal = ref(false)
 const saving = ref(false)
 const formError = ref('')
 const form = ref({
   id: 0,
   code: '',
-  type: 'text' as Field['type'],
+  type: 'text' as FieldType,
   label: '',
   is_required_default: false,
 })
@@ -142,12 +130,12 @@ const numMin = ref<number | '' | null>(null)
 const numMax = ref<number | '' | null>(null)
 const maxLength = ref<number | ''>(1000)
 
-function metaText(f: Field): string {
+function metaText(f: FieldDef): string {
   if (!f.meta_data) return '—'
   return JSON.stringify(f.meta_data)
 }
 
-function applyMeta(f: Field | null) {
+function applyMeta(f: FieldDef | null) {
   const meta = (f?.meta_data ?? {}) as Record<string, unknown>
   optionsText.value = Array.isArray(meta.options) ? (meta.options as string[]).join('\n') : ''
   minuteStep.value = typeof meta.minute_step === 'number' ? meta.minute_step : 5
@@ -199,7 +187,7 @@ function metaError(): string {
 }
 
 async function load() {
-  items.value = await pageAll<Field>('/request-fields')
+  items.value = await pageAll<FieldDef>('/request-fields')
 }
 
 function openCreate() {
@@ -209,7 +197,7 @@ function openCreate() {
   modal.value = true
 }
 
-function openEdit(f: Field) {
+function openEdit(f: FieldDef) {
   form.value = {
     id: f.id,
     code: f.code,
@@ -260,7 +248,7 @@ async function save() {
   }
 }
 
-async function remove(f: Field) {
+async function remove(f: FieldDef) {
   if (!confirm(`Удалить поле «${f.label}» (${f.code})?`)) return
   try {
     await api(`/request-fields/${f.id}`, { method: 'DELETE' })

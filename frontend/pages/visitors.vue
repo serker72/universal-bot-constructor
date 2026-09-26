@@ -37,9 +37,12 @@
             <td class="whitespace-nowrap">{{ v.phone || '—' }}</td>
             <td>{{ v.consent_given ? 'Да' : 'Нет' }}</td>
             <td>
-              <span :class="v.is_blocked ? 'text-red-600' : 'text-green-600'">
-                {{ v.is_blocked ? 'Заблокирован' : 'Активен' }}
-              </span>
+              <UiBoolBadge
+                :value="v.is_blocked"
+                tone="danger"
+                yes-text="Заблокирован"
+                no-text="Активен"
+              />
             </td>
             <td class="whitespace-nowrap">{{ formatDateTime(v.created_at) }}</td>
             <td>
@@ -52,23 +55,13 @@
           </tr>
         </tbody>
       </table>
-      <div class="px-4 pb-4">
-        <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
-      </div>
+      <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-interface Visitor {
-  id: number
-  telegram_id: number
-  full_name: string
-  phone: string | null
-  consent_given: boolean
-  is_blocked: boolean
-  created_at: string
-}
+import type { Visitor } from '~/types/models'
 
 const { api, page } = useApi()
 

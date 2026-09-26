@@ -36,26 +36,13 @@
           </tr>
         </tbody>
       </table>
-      <div class="px-4 pb-4">
-        <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
-      </div>
+      <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-interface Device {
-  id: number
-  user_id: number
-  device_id: string
-  user_agent: string | null
-  created_at: string
-  last_seen_at: string
-}
-interface User {
-  id: number
-  username: string
-}
+import type { Device, User } from '~/types/models'
 
 const { page, pageAll } = useApi()
 
@@ -69,7 +56,7 @@ const { items, total, offset, load, changeOffset: goTo } = useListLoader<Device>
 }, limit)
 
 function userName(id: number): string {
-  return users.value.find((u) => u.id === id)?.username ?? `#${id}`
+  return nameById(users.value, id)
 }
 
 function changeOffset(v: number) {

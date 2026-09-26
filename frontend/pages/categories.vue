@@ -20,9 +20,7 @@
             <td class="font-medium">{{ cat.name }}</td>
             <td>{{ cat.sort_order }}</td>
             <td>
-              <span :class="cat.is_active ? 'text-green-600' : 'text-gray-400'">
-                {{ cat.is_active ? 'Да' : 'Нет' }}
-              </span>
+              <UiBoolBadge :value="cat.is_active" />
             </td>
             <td v-if="isAdmin" class="space-x-2 whitespace-nowrap">
               <button class="btn-secondary" @click="openEdit(cat)">Изменить</button>
@@ -36,9 +34,7 @@
           </tr>
         </tbody>
       </table>
-      <div class="px-4 pb-4">
-        <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
-      </div>
+      <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
     </div>
 
     <UiModal :open="modal" :title="form.id ? 'Изменить категорию' : 'Новая категория'" @close="modal = false">
@@ -79,33 +75,13 @@
     </UiModal>
 
     <!-- Назначение менеджеров категории -->
-    <UiModal :open="managersModal" title="Менеджеры категории" @close="managersModal = false">
-      <p class="mb-3 text-sm text-gray-500">
-        Менеджеры категории получают доступ ко всем её объектам (заявки и уведомления).
-      </p>
-      <p v-if="managersLoading" class="mb-3 text-sm text-gray-500">Загрузка…</p>
-      <p v-else-if="!managers.length" class="mb-3 text-sm text-gray-500">
-        Нет активных пользователей с ролью «менеджер».
-      </p>
-      <div class="mb-4 max-h-64 space-y-2 overflow-y-auto">
-        <label v-for="m in managers" :key="m.id" class="flex items-center gap-2 text-sm">
-          <input v-model="selectedManagers" type="checkbox" :value="m.id" class="h-4 w-4" />
-          {{ m.username }}
-        </label>
-      </div>
-      <p v-if="managersError" class="mb-2 text-sm text-red-600">{{ managersError }}</p>
-      <div class="flex justify-end gap-2">
-        <button class="btn-secondary" type="button" @click="managersModal = false">Отмена</button>
-        <button
-          class="btn-primary"
-          type="button"
-          :disabled="managersSaving || managersLoading || !managersLoaded"
-          @click="saveManagers"
-        >
-          Сохранить
-        </button>
-      </div>
-    </UiModal>
+    <UiManagersModal
+      :open="managersModal"
+      :endpoint="`/categories/${managersCategoryId}`"
+      title="Менеджеры категории"
+      hint="Менеджеры категории получают доступ ко всем её объектам (заявки и уведомления)."
+      @close="managersModal = false"
+    />
     <!-- Состав полей заявки категории -->
     <UiModal :open="fieldsModal" title="Поля заявки категории" @close="fieldsModal = false">
       <p class="mb-3 text-sm text-gray-500">
@@ -159,16 +135,9 @@
 </template>
 
 <script setup lang="ts">
-interface Category {
-  id: number
-  name: string
-  button_text: string | null
-  sort_order: number
-  is_active: boolean
-}
+import type { Category, FieldDef } from '~/types/models'
 
 const { api, page, pageAll } = useApi()
-const { managers, loadManagers } = useManagers()
 const isAdmin = useAuth().isAdmin
 
 const limit = PAGE_SIZE
@@ -181,32 +150,20 @@ const saving = ref(false)
 const formError = ref('')
 const form = ref({ id: 0, name: '', button_text: '', sort_order: 0, is_active: true })
 
+// модалка UiManagersModal: id категории нужен только для endpoint
 const managersModal = ref(false)
-const selectedManagers = ref<number[]>([])
-const managersSaving = ref(false)
-const managersError = ref('')
 const managersCategoryId = ref(0)
-const managersLoading = ref(false)
-const managersLoaded = ref(false)
 
 // -- поля заявки категории --------------------------------------------------
-interface ReqField {
-  id: number
-  code: string
-  type: string
-  label: string
-  is_required_default: boolean
-  meta_data: Record<string, unknown> | null
-}
 interface FieldRow {
-  field: ReqField
+  field: FieldDef
   selected: boolean
   sort_order: number
   is_required: boolean
 }
 
 const fieldsModal = ref(false)
-const fieldsAll = ref<ReqField[]>([])
+const fieldsAll = ref<FieldDef[]>([])
 const fieldsRows = ref<FieldRow[]>([])
 const fieldsSaving = ref(false)
 const fieldsError = ref('')
@@ -224,10 +181,10 @@ async function openFields(cat: Category) {
   fieldsModal.value = true
   try {
     // справочник перечитывается: поля могли измениться на странице «Поля заявки»
-    fieldsAll.value = await pageAll<ReqField>('/request-fields')
+    fieldsAll.value = await pageAll<FieldDef>('/request-fields')
     const out = await api<{
       category_id: number
-      fields: { field: ReqField; sort_order: number; is_required: boolean }[]
+      fields: { field: FieldDef; sort_order: number; is_required: boolean }[]
     }>(`/request-fields/categories/${cat.id}/fields`)
     if (fieldsCategoryId.value !== cat.id) return
     const linked = new Map(out.fields.map((f) => [f.field.id, f]))
@@ -332,46 +289,9 @@ async function remove(cat: Category) {
   }
 }
 
-async function openManagers(cat: Category) {
-  // сброс состояния предыдущей категории: до загрузки «Сохранить» недоступна,
-  // иначе PUT перезаписал бы доступы новой категории списком предыдущей
+function openManagers(cat: Category) {
   managersCategoryId.value = cat.id
-  selectedManagers.value = []
-  managersLoaded.value = false
-  managersLoading.value = true
-  managersError.value = ''
   managersModal.value = true
-  try {
-    const [out] = await Promise.all([
-      api<{ category_id: number; user_ids: number[] }>(`/categories/${cat.id}/managers`),
-      loadManagers(true),
-    ])
-    if (managersCategoryId.value !== cat.id) return
-    selectedManagers.value = [...out.user_ids]
-    managersLoaded.value = true
-  } catch (err) {
-    console.warn('[categories] managers load failed', err)
-    managersError.value = apiErrorMessage(err, 'Не удалось загрузить менеджеров')
-  } finally {
-    if (managersCategoryId.value === cat.id) managersLoading.value = false
-  }
-}
-
-async function saveManagers() {
-  managersSaving.value = true
-  managersError.value = ''
-  try {
-    await api(`/categories/${managersCategoryId.value}/managers`, {
-      method: 'PUT',
-      body: { user_ids: selectedManagers.value },
-    })
-    managersModal.value = false
-  } catch (err) {
-    console.warn('[categories] managers save failed', err)
-    managersError.value = apiErrorMessage(err, 'Не удалось сохранить менеджеров')
-  } finally {
-    managersSaving.value = false
-  }
 }
 
 // ошибка загрузки — сообщение пользователю, а не пустая страница

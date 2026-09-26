@@ -1,13 +1,9 @@
 // Composable списка менеджеров (роль manager, активные) — общий для страниц
-// категорий и объектов (модалки «Менеджеры»). Список перечитывается при каждом
-// открытии модалки (force), чтобы новые/деактивированные менеджеры не терялись.
+// категорий и объектов (модалка UiManagersModal). Список перечитывается при
+// каждом открытии модалки (force), чтобы новые/деактивированные менеджеры
+// не терялись.
 
-interface ManagerUser {
-  id: number
-  username: string
-  role: 'admin' | 'manager'
-  is_active: boolean
-}
+import type { ManagerUser } from '~/types/models'
 
 export function useManagers() {
   const managers = useState<ManagerUser[]>('managers-list', () => [])

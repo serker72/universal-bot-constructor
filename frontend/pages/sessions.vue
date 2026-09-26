@@ -41,9 +41,7 @@
             <td>{{ s.device_id }}</td>
             <td class="max-w-48 truncate font-mono text-xs" :title="s.refresh_token_jti">{{ s.refresh_token_jti }}</td>
             <td>
-              <span :class="s.is_active ? 'text-green-600' : 'text-gray-400'">
-                {{ s.is_active ? 'Активна' : 'Отозвана' }}
-              </span>
+              <UiBoolBadge :value="s.is_active" yes-text="Активна" no-text="Отозвана" />
             </td>
             <td class="whitespace-nowrap">{{ formatDateTime(s.created_at) }}</td>
             <td class="whitespace-nowrap">{{ formatDateTime(s.revoked_at) }}</td>
@@ -57,27 +55,13 @@
           </tr>
         </tbody>
       </table>
-      <div class="px-4 pb-4">
-        <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
-      </div>
+      <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-interface Session {
-  id: number
-  device_id: number
-  user_id: number
-  refresh_token_jti: string
-  is_active: boolean
-  created_at: string
-  revoked_at: string | null
-}
-interface User {
-  id: number
-  username: string
-}
+import type { Session, User } from '~/types/models'
 
 const { api, page, pageAll } = useApi()
 
@@ -93,7 +77,7 @@ const { items, total, offset, load, changeOffset: goTo } = useListLoader<Session
 }, limit)
 
 function userName(id: number): string {
-  return users.value.find((u) => u.id === id)?.username ?? `#${id}`
+  return nameById(users.value, id)
 }
 
 function changeOffset(v: number) {

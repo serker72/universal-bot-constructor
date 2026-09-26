@@ -20,12 +20,10 @@
         <tbody>
           <tr v-for="u in items" :key="u.id">
             <td class="font-medium">{{ u.username }}</td>
-            <td>{{ u.role === 'admin' ? 'Администратор' : 'Менеджер' }}</td>
+            <td>{{ ROLE_LABELS[u.role] }}</td>
             <td>{{ u.telegram_id ?? '—' }}</td>
             <td>
-              <span :class="u.is_active ? 'text-green-600' : 'text-gray-400'">
-                {{ u.is_active ? 'Да' : 'Нет' }}
-              </span>
+              <UiBoolBadge :value="u.is_active" />
             </td>
             <td class="whitespace-nowrap">{{ formatDateTime(u.created_at) }}</td>
             <td class="space-x-2 whitespace-nowrap">
@@ -40,9 +38,7 @@
           </tr>
         </tbody>
       </table>
-      <div class="px-4 pb-4">
-        <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
-      </div>
+      <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
     </div>
 
     <UiModal :open="modal" :title="isEdit ? 'Изменить пользователя' : 'Новый пользователь'" @close="modal = false">
@@ -61,8 +57,9 @@
           <div>
             <label class="label" for="u-role">Роль</label>
             <select id="u-role" v-model="form.role" class="input">
-              <option value="manager">Менеджер</option>
-              <option value="admin">Администратор</option>
+              <option v-for="(label, value) in ROLE_LABELS" :key="value" :value="value">
+                {{ label }}
+              </option>
             </select>
           </div>
           <div>
@@ -85,15 +82,8 @@
 </template>
 
 <script setup lang="ts">
-interface User {
-  id: number
-  username: string
-  role: 'admin' | 'manager'
-  telegram_id: number | null
-  is_active: boolean
-  created_at: string
-  updated_at: string
-}
+import type { User, UserRole } from '~/types/models'
+import { ROLE_LABELS } from '~/types/models'
 
 const auth = useAuth()
 const { api, page } = useApi()
@@ -107,7 +97,7 @@ const modal = ref(false)
 const isEdit = ref(false)
 const saving = ref(false)
 const formError = ref('')
-const form = ref({ id: 0, username: '', password: '', role: 'manager' as 'admin' | 'manager', telegramId: '', is_active: true })
+const form = ref({ id: 0, username: '', password: '', role: 'manager' as UserRole, telegramId: '', is_active: true })
 
 function changeOffset(v: number) {
   goTo(v, '[users]')

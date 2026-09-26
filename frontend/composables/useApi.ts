@@ -99,7 +99,8 @@ export function useApi() {
     }
   }
 
-  return { api, page, pageAll, baseURL, refresh }
+  // refresh — только внутренний авто-refresh при 401 (внешних потребителей нет)
+  return { api, page, pageAll, baseURL }
 }
 
 export type { Page }

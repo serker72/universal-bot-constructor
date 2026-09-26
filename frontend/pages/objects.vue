@@ -31,14 +31,10 @@
             <td>{{ categoryName(obj.category_id) }}</td>
             <td>{{ obj.sort_order }}</td>
             <td>
-              <span :class="obj.is_active ? 'text-green-600' : 'text-gray-400'">
-                {{ obj.is_active ? 'Да' : 'Нет' }}
-              </span>
+              <UiBoolBadge :value="obj.is_active" />
             </td>
             <td>
-              <span :class="obj.has_pdf ? 'text-green-600' : 'text-gray-400'">
-                {{ obj.has_pdf ? 'Есть' : 'Нет' }}
-              </span>
+              <UiBoolBadge :value="obj.has_pdf" yes-text="Есть" no-text="Нет" />
             </td>
             <td class="space-x-2 whitespace-nowrap">
               <button v-if="obj.has_pdf" class="btn-secondary" @click="openPdf(obj)">PDF</button>
@@ -55,9 +51,7 @@
           </tr>
         </tbody>
       </table>
-      <div class="px-4 pb-4">
-        <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
-      </div>
+      <UiPagination :total="total" :limit="limit" :offset="offset" @change="changeOffset" />
     </div>
 
     <!-- Редактирование объекта (manager — режим просмотра) -->
@@ -143,51 +137,19 @@
     </UiModal>
 
     <!-- Назначение менеджеров -->
-    <UiModal :open="managersModal" title="Менеджеры объекта" @close="managersModal = false">
-      <p v-if="managersLoading" class="mb-3 text-sm text-gray-500">Загрузка…</p>
-      <p v-else-if="!managers.length" class="mb-3 text-sm text-gray-500">
-        Нет активных пользователей с ролью «менеджер».
-      </p>
-      <div class="mb-4 max-h-64 space-y-2 overflow-y-auto">
-        <label v-for="m in managers" :key="m.id" class="flex items-center gap-2 text-sm">
-          <input v-model="selectedManagers" type="checkbox" :value="m.id" class="h-4 w-4" />
-          {{ m.username }}
-        </label>
-      </div>
-      <p v-if="managersError" class="mb-2 text-sm text-red-600">{{ managersError }}</p>
-      <div class="flex justify-end gap-2">
-        <button class="btn-secondary" type="button" @click="managersModal = false">Отмена</button>
-        <button
-          class="btn-primary"
-          type="button"
-          :disabled="managersSaving || managersLoading || !managersLoaded"
-          @click="saveManagers"
-        >
-          Сохранить
-        </button>
-      </div>
-    </UiModal>
+    <UiManagersModal
+      :open="managersModal"
+      :endpoint="`/objects/${managersObjectId}`"
+      title="Менеджеры объекта"
+      @close="managersModal = false"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-interface Category {
-  id: number
-  name: string
-}
-interface Obj {
-  id: number
-  category_id: number
-  name: string
-  short_description: string
-  sort_order: number
-  is_active: boolean
-  has_pdf: boolean
-}
-// тип менеджера приходит из composable useManagers
+import type { Category, Obj } from '~/types/models'
 
 const { api, page, pageAll, baseURL } = useApi()
-const { managers, loadManagers } = useManagers()
 const auth = useAuth()
 const isAdmin = auth.isAdmin
 const route = useRoute()
@@ -211,16 +173,12 @@ const formError = ref('')
 const pdfFile = ref<File | null>(null)
 const form = ref({ id: 0, category_id: 0, name: '', short_description: '', sort_order: 0, is_active: true, has_pdf: false })
 
+// модалка UiManagersModal: id объекта нужен только для endpoint
 const managersModal = ref(false)
-const selectedManagers = ref<number[]>([])
-const managersSaving = ref(false)
-const managersError = ref('')
 const managersObjectId = ref(0)
-const managersLoading = ref(false)
-const managersLoaded = ref(false)
 
 function categoryName(id: number): string {
-  return categories.value.find((c) => c.id === id)?.name ?? `#${id}`
+  return nameById(categories.value, id)
 }
 
 function changeOffset(v: number) {
@@ -331,47 +289,9 @@ function openPdf(obj: Obj) {
   window.open(`${baseURL}/objects/${obj.id}/pdf`, '_blank')
 }
 
-async function openManagers(obj: Obj) {
-  // сброс состояния предыдущей сущности: до загрузки «Сохранить» недоступна,
-  // иначе PUT перезаписал бы доступы новой сущности списком предыдущей
+function openManagers(obj: Obj) {
   managersObjectId.value = obj.id
-  selectedManagers.value = []
-  managersLoaded.value = false
-  managersLoading.value = true
-  managersError.value = ''
   managersModal.value = true
-  try {
-    const [out] = await Promise.all([
-      api<{ object_id: number; user_ids: number[] }>(`/objects/${obj.id}/managers`),
-      loadManagers(true),
-    ])
-    // модалку за это время могли открыть для другого объекта
-    if (managersObjectId.value !== obj.id) return
-    selectedManagers.value = [...out.user_ids]
-    managersLoaded.value = true
-  } catch (err) {
-    console.warn('[objects] managers load failed', err)
-    managersError.value = apiErrorMessage(err, 'Не удалось загрузить менеджеров')
-  } finally {
-    if (managersObjectId.value === obj.id) managersLoading.value = false
-  }
-}
-
-async function saveManagers() {
-  managersSaving.value = true
-  managersError.value = ''
-  try {
-    await api(`/objects/${managersObjectId.value}/managers`, {
-      method: 'PUT',
-      body: { user_ids: selectedManagers.value },
-    })
-    managersModal.value = false
-  } catch (err) {
-    console.warn('[objects] managers save failed', err)
-    managersError.value = apiErrorMessage(err, 'Не удалось сохранить менеджеров')
-  } finally {
-    managersSaving.value = false
-  }
 }
 
 async function remove(obj: Obj) {

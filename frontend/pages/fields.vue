@@ -81,11 +81,12 @@
         <div v-else-if="form.type === 'number'" class="grid grid-cols-2 gap-4">
           <div>
             <label class="label" for="fld-min">Минимум</label>
-            <input id="fld-min" v-model.number="numMin" class="input" type="number" />
+            <!-- step="any": границы NUMBER могут быть дробными (backend _is_number и парсер бота допускают) -->
+            <input id="fld-min" v-model.number="numMin" class="input" type="number" step="any" />
           </div>
           <div>
             <label class="label" for="fld-max">Максимум</label>
-            <input id="fld-max" v-model.number="numMax" class="input" type="number" />
+            <input id="fld-max" v-model.number="numMax" class="input" type="number" step="any" />
           </div>
         </div>
         <div v-else-if="form.type === 'text'" class="space-y-2">

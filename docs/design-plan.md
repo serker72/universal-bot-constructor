@@ -1068,6 +1068,93 @@ nginx не читает переменные окружения напрямую
 
 ---
 
+## Рефакторинг frontend: устранение дублирования и мёртвого кода
+
+**Статус: выполнено (26.09.2026).** Реализованы шаги 1–9 плана ниже;
+проверка `npm run build` в `frontend` — Build complete, без ошибок.
+
+### Задача
+
+Аудит frontend выявил копипаст и неиспользуемый код: модалка «Менеджеры»
+дублируется в `/categories` и `/objects`, на страницах повторяются
+TS-интерфейсы моделей и name-by-id хелперы, булевые статусы рендерятся
+инлайном помимо `StatusBadge`, часть экспортов не используется.
+
+### Результаты проверки аудита (подтверждено / опровергнуто)
+
+Подтверждено:
+
+1. **Модалка «Менеджеры»** — почти покадровый клон: `categories.vue`
+   (шаблон + `openManagers`/`saveManagers`, ~90 строк) и `objects.vue`
+   (то же). Отличия — только endpoint (`/categories/{id}/managers` vs
+   `/objects/{id}/managers`), заголовок и подсказка в категории.
+2. **Хелперы name-by-id** (`find(...)?.name ?? '#id'`) — 4 копии:
+   `categoryName` (objects), `objectName` (requests), `userName`
+   (devices, sessions).
+3. **TS-интерфейсы моделей** дублируются: `Category` (categories +
+   objects), `User` (users + devices + sessions), `Obj` (objects +
+   requests). ⚠️ `ReqField` в categories (справочник поля) и в requests
+   (значение поля в заявке) — **разные модели с одним именем**,
+   объединять нельзя, только переименовать (`FieldDef` /
+   `RequestFieldValue`).
+4. **Булев «статус» инлайном** помимо `StatusBadge` — 6 мест:
+   «Да/Нет» (categories, objects, users), «Есть/Нет» PDF (objects),
+   «Активна/Отозвана» (sessions), «Заблокирован/Активен» (visitors).
+5. **Обёртка пагинации** `<div class="px-4 pb-4"><UiPagination/></div>` —
+   7 одинаковых копий.
+6. **`refresh` в `return useApi()`** — внешних потребителей нет (только
+   внутреннее использование при 401) — мёртвый экспорт.
+
+Опровергнуто (пункты аудита устарели, не делаем):
+
+- `limit: 1000` — в коде отсутствует (есть `PAGE_SIZE = 20`,
+  `MAX_PAGE_LIMIT = 100`, `pageAll()`);
+- `formatDate` — такой функции нет, `formatDateTime` используется
+  на 5 страницах;
+- `moscowToUtc` — используется в `requests.vue` (фильтры дат);
+- класс `.checkbox` в CSS — отсутствует в `main.css`;
+- иконка `plus` — отсутствует в `AppIcon.vue`.
+
+### Принятые решения
+
+- **UiManagersModal — вариант A**: props `open`, `endpoint` (например
+  `/categories/5`), `title`, опциональный `hint`; компонент сам делает
+  `GET/PUT {endpoint}/managers`, внутри вызывает `useManagers()`,
+  сохраняет защиту от гонки (смена сущности во время загрузки —
+  результат отбрасывается, «Сохранить» недоступен до загрузки).
+  Вариант B (коллбэки `load`/`save`) отклонён — больше кода в страницах
+  без текущих сценариев применения.
+- **UiBoolBadge — отдельный компонент** (props: `value`, `yesText`,
+  `noText`, `tone`): булевые флаги не подмешиваются в `StatusBadge`
+  (строковые статусы заявок).
+- **Общие типы** — `frontend/types/models.ts`: `User`, `Category`,
+  `Obj`, `FieldDef` (бывш. ReqField/categories), `RequestFieldValue`
+  (бывш. ReqField/requests), `Visitor`, `Device`, `Session`, `Request`,
+  `ManagerUser` + словари подписей (роль, статус заявки, тип поля).
+- **nameById** — `frontend/utils/lookup.ts` (автоимпорт Nuxt).
+
+### План реализации
+
+1. `frontend/types/models.ts` — общие интерфейсы и статусные словари;
+2. `frontend/components/UiManagersModal.vue` — модалка целиком;
+3. заменить дубли в `categories.vue` и `objects.vue` (−~160 строк);
+4. `frontend/utils/lookup.ts` → `nameById(list, id)`, применить в
+   objects/requests/devices/sessions;
+5. `frontend/components/UiBoolBadge.vue` — заменить 6 инлайн-статусов;
+6. отступы `px-4 pb-4` внутрь `UiPagination.vue`, убрать 7 обёрток;
+7. убрать мёртвый экспорт `refresh` из `return useApi()` (функцию
+   оставить внутренней);
+8. локальные интерфейсы страниц → `import type { … } from '~/types/models'`;
+9. проверка: `npm run build` в `frontend` (ошибки TS и рендера).
+
+### Scope
+
+Только `frontend/`. Backend, бот, API-контракты, схема БД — без
+изменений. Поведение интерфейса (кроме отображения булевых статусов
+через UiBoolBadge) — без изменений.
+
+---
+
 ## Как использовать этот файл в новой сессии
 
 1. Откройте новый диалог.
@@ -1142,7 +1229,7 @@ nginx не читает переменные окружения напрямую
 - **Шаг 6** — выполнен: frontend (Nuxt 3 + Tailwind, `frontend/`) + запуск
   всех приложений через docker-compose:
   - каркас: `nuxt.config.ts` (SPA, `@nuxtjs/tailwindcss`, `NUXT_PUBLIC_BACKEND_URL`),
-    `Dockerfile` (node:22-alpine, build → `.output`), `assets/css/main.css`
+    `Dockerfile` (node:24.12-alpine, build → `.output`), `assets/css/main.css`
     (btn/input/table/card утилиты);
   - composables: `useApi` ($fetch c `credentials: 'include'`, авто-refresh при 401,
     тип Page), `useAuth` (useState + localStorage, login/logout, isAdmin),
@@ -1428,7 +1515,28 @@ nginx не читает переменные окружения напрямую
   resolve` (nginx ≥ 1.27.3, образ 1.27.5); `proxy_pass`/`location` без
   изменений. Устранена особенность «после пересоздания backend/bot нужен
   `nginx -s reload`» (проявлялась 502 после пересборки образов). Проверено:
-  `nginx -t`; смена IP backend (172.18.0.2 → 172.18.0.10) без reload —
-  health 200 через ~10 с; prod-шаблон стартует без приложений в сети (502),
-  после их появления начинает проксировать (~30 с — повтор резолва после
-  NXDOMAIN).
+   `nginx -t`; смена IP backend (172.18.0.2 → 172.18.0.10) без reload —
+   health 200 через ~10 с; prod-шаблон стартует без приложений в сети (502),
+   после их появления начинает проксировать (~30 с — повтор резолва после
+   NXDOMAIN).
+- **Рефакторинг frontend: устранение дублирования и мёртвого кода** —
+  выполнено (26.09.2026). Подробности — в разделе «Рефакторинг frontend»
+  выше. Кратко:
+  - `frontend/types/models.ts` — общие интерфейсы (`User`, `Category`,
+    `Obj`, `FieldDef`, `RequestFieldValue`, `Visitor`, `Device`,
+    `Session`, `Request`, `ManagerUser`) и словари подписей
+    (`ROLE_LABELS`, `FIELD_TYPE_LABELS`, `REQUEST_STATUSES`,
+    `REQUEST_STATUS_LABELS`); локальные интерфейсы страниц заменены
+    `import type`;
+  - `frontend/components/UiManagersModal.vue` — общая модалка
+    «Менеджеры» (props `open`/`endpoint`/`title`/`hint`, GET/PUT
+    `{endpoint}/managers`, защита от гонки по номеру открытия); дубли
+    удалены из `/categories` и `/objects` (−~160 строк);
+  - `frontend/utils/lookup.ts` — `nameById()` вместо 4 копий
+    name-by-id-хелперов (objects/requests/devices/sessions);
+  - `frontend/components/UiBoolBadge.vue` — 6 инлайн-булевых статусов
+    (categories, objects ×2, sessions, users, visitors);
+  - `UiPagination.vue` — отступы `px-4 pb-4` внутри компонента,
+    убраны 7 одинаковых обёрток;
+  - `useApi()` — убран мёртвый экспорт `refresh` из return;
+  - проверка: `npm run build` — Build complete, ошибок нет.

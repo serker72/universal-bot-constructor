@@ -1,7 +1,9 @@
 # Frontend (Nuxt.js): сборка и запуск node .output/server/index.mjs
 # Использование: docker compose -f docker-compose.frontend.yml up -d --build
+# Версия node совпадает с локальным хостом: frontend/.nvmrc = 24.12
+# (хост nvm: v24.12.0) — менять обе одновременно
 
-FROM node:22-alpine AS build
+FROM node:24.12-alpine AS build
 WORKDIR /app
 
 # lock-файл обязателен: npm ci ставит ровно зафиксированные версии и падает
@@ -13,7 +15,7 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:22-alpine
+FROM node:24.12-alpine
 WORKDIR /app
 
 ENV NODE_ENV=production

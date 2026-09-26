@@ -14,6 +14,7 @@ import asyncio
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.redis import DefaultKeyBuilder, RedisStorage
+from aiogram.types import BotCommand
 from aiogram_dialog import setup_dialogs
 from dishka.integrations.aiogram import setup_dishka
 from faststream.rabbit import RabbitBroker
@@ -80,6 +81,10 @@ async def run() -> None:
 
         # 2. Bot, dispatcher, роутеры
         bot = await container.get(Bot)
+        # Меню команд бота (кнопка «меню» в поле ввода Telegram)
+        await bot.set_my_commands(
+            [BotCommand(command="start", description="Главное меню")]
+        )
 
         dp = Dispatcher(
             storage=RedisStorage.from_url(

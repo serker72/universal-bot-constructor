@@ -13,8 +13,8 @@ class Category(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(nullable=False)
-    # Текст кнопки «Создать заявку» для объектов категории;
-    # NULL/пустое — текст по умолчанию «Создать заявку»
+    # Текст кнопки «Создать заявку» для объектов категории (иконка — часть
+    # текста); NULL/пустое — текст по умолчанию «📝 Создать заявку»
     button_text: Mapped[str | None] = mapped_column(
         sa.String(64), nullable=True, default=None
     )

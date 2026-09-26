@@ -16,8 +16,8 @@ from app.bot.keyboards import (
     MenuCB,
     ObjectActionCB,
     ObjectCB,
-    back_to_categories_keyboard,
     categories_keyboard,
+    main_menu_keyboard,
     object_keyboard,
     objects_keyboard,
 )
@@ -55,7 +55,9 @@ async def send_categories_menu(
     """Меню категорий (страница page): новое сообщение или правка текущего."""
     items, pages, page = await bot_service.list_categories(page)
     if not items:
-        text, markup = "Категории пока не добавлены.", back_to_categories_keyboard()
+        # нет активных категорий: возвращать некуда (кнопки «Категории»/
+        # «Главное меню» вели бы на это же сообщение) — только текст
+        text, markup = "Категории пока не добавлены.", None
     else:
         text, markup = CATEGORIES_TEXT, categories_keyboard(items, page, pages)
     if edit:
@@ -72,9 +74,10 @@ async def _show_objects_page(
         return
     items, pages, page = await bot_service.list_objects(category_id, page)
     if not items:
+        # «◀️ Категории» не нужен: список категорий — это и есть главное меню
         await callback.message.edit_text(  # type: ignore[union-attr]
             "В этой категории пока нет объектов.",
-            reply_markup=back_to_categories_keyboard(),
+            reply_markup=main_menu_keyboard(),
         )
     else:
         await callback.message.edit_text(  # type: ignore[union-attr]

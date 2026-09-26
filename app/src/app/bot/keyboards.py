@@ -78,11 +78,20 @@ def _add_pager(
         )
 
 
-def back_to_categories_keyboard():
-    """Кнопки возврата: к категориям и в главное меню."""
+def main_menu_keyboard():
+    """Только «Главное меню» — когда возвращаться некуда (пустой список)."""
     builder = InlineKeyboardBuilder()
     builder.row(
-        types.InlineKeyboardButton(text="◀️ Категории", callback_data=CategoryCB().pack())
+        types.InlineKeyboardButton(text="🏠 Главное меню", callback_data=MenuCB().pack())
+    )
+    return builder.as_markup()
+
+
+def request_cancelled_keyboard():
+    """Результат отмены заявки: назад к списку своих заявок и в главное меню."""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        types.InlineKeyboardButton(text="◀️ Мои заявки", callback_data=RequestCB().pack())
     )
     builder.row(
         types.InlineKeyboardButton(text="🏠 Главное меню", callback_data=MenuCB().pack())
@@ -128,8 +137,12 @@ def objects_keyboard(category_id: int, items, page: int, total: int):
         prev_cb=ObjectCB(category_id=category_id, page=page - 1).pack(),
         next_cb=ObjectCB(category_id=category_id, page=page + 1).pack(),
     )
+    # возврат из списка объектов: список категорий — это главное меню,
+    # отдельная кнопка «Категории» не нужна
     builder.row(
-        types.InlineKeyboardButton(text="◀️ Категории", callback_data=CategoryCB().pack())
+        types.InlineKeyboardButton(
+            text="🏠 Главное меню", callback_data=MenuCB().pack()
+        )
     )
     return builder.as_markup()
 
@@ -138,7 +151,8 @@ def object_keyboard(category_id: int, object_id: int, request_button_text: str |
     """Страница объекта: PDF, заявка, назад (1 кнопка в строке).
 
     ``request_button_text`` — текст кнопки создания заявки из категории
-    объекта (None/пустое — текст по умолчанию «Создать заявку»).
+    объекта (None/пустое — текст по умолчанию «📝 Создать заявку»);
+    иконка в самом тексте, к кастомному не добавляется.
     """
     builder = InlineKeyboardBuilder()
     builder.button(
@@ -146,7 +160,7 @@ def object_keyboard(category_id: int, object_id: int, request_button_text: str |
         callback_data=ObjectActionCB(object_id=object_id).pack(),
     )
     builder.button(
-        text=f"📝 {request_button_text or 'Создать заявку'}",
+        text=request_button_text or "📝 Создать заявку",
         callback_data=CreateRequestCB(object_id=object_id).pack(),
     )
     builder.adjust(1)

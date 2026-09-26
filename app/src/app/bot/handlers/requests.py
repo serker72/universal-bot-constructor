@@ -9,8 +9,9 @@ from dishka.integrations.aiogram import FromDishka
 from app.bot.keyboards import (
     CreateRequestCB,
     RequestCB,
-    back_to_categories_keyboard,
+    main_menu_keyboard,
     my_requests_keyboard,
+    request_cancelled_keyboard,
     request_details_keyboard,
 )
 from app.bot.services import BotService, BotServiceError
@@ -73,8 +74,10 @@ async def show_my_requests(
         visitor.id, page=callback_data.page
     )
     if not items:
+        # заявок нет: «Категории» дублирует «Главное меню» (меню и есть
+        # список категорий) — оставляем только возврат в меню
         await callback.message.edit_text(  # type: ignore[union-attr]
-            "У вас пока нет заявок.", reply_markup=back_to_categories_keyboard()
+            "У вас пока нет заявок.", reply_markup=main_menu_keyboard()
         )
         await callback.answer()
         return
@@ -110,7 +113,7 @@ async def cancel_request(
     await callback.answer("Заявка отменена")
     await callback.message.edit_text(  # type: ignore[union-attr]
         f"🚫 Заявка #{req.id} отменена.",
-        reply_markup=back_to_categories_keyboard(),
+        reply_markup=request_cancelled_keyboard(),
     )
 
 

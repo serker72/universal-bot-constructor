@@ -51,24 +51,131 @@ docs/
   architecture.md       итоговая архитектура (ER, API, потоки данных)
 ```
 
-## Быстрый старт (docker)
+## Требования к серверу
+
+- **ОС**: Linux с ядром ≥ 5.x (Ubuntu 22.04/24.04 LTS или аналог), systemd;
+- **ПО**: Docker Engine ≥ 24 с плагином `docker compose` v2 (только `docker
+  compose` — отдельный `docker-compose` v1 не требуется), git;
+- **Ресурсы (минимум)**: 2 CPU / 4 GB RAM / 20 GB диск (образы + БД + PDF-хранилище);
+- **Сеть**: исходящие соединения к Docker Hub, PyPI/npm (сборка образов) и
+  api.telegram.org; входящие :80 и :443 (prod — для Let's Encrypt HTTP-01 и
+  доступа к админке; :80 обязателен даже при https);
+- **Домен**: для prod — A-запись домена указывает на IP сервера (проверить до
+  выпуска сертификата); для loc — имя хоста прописывается в `/etc/hosts`.
+
+## CPU (воркеры backend)
+
+Число воркеров uvicorn должно соответствовать количеству доступных CPU-ядер.
+Количество ядер на сервере:
 
 ```bash
-cp .env.example .env    # заполнить секреты (пароли, BOT_TOKEN, BACKEND_JWT_SECRET)
-docker compose up -d --build
+cat /proc/cpuinfo | grep 'processor' | wc -l
 ```
+
+В `.env` (prod) установить:
+
+```bash
+BACKEND_WORKER_COUNT=<количество доступных CPU>
+BACKEND_CONTAINER_COMMAND="--workers ${BACKEND_WORKER_COUNT}"
+```
+
+`--reload` (значение для разработки) в prod не использовать.
+
+## Быстрый старт (docker)
+
+### 1. Развертывание кода
+
+Код проекта размещается в `/opt/universal-bot-constructor`:
+
+```bash
+git clone <repo-url> /opt/universal-bot-constructor
+cd /opt/universal-bot-constructor
+```
+
+Либо извлечение архива в `/opt` с переименованием каталога в `universal-bot-constructor`.
+
+### 2. Конфигурация `.env`
+
+```bash
+cp .env.example .env
+```
+
+- `PROJECT_DATA_DIR` — каталог данных на хосте (по умолчанию
+  `/opt/universal-bot-constructor-data`);
+- `BOT_TOKEN` — токен Telegram-бота: получить у [@BotFather](https://t.me/BotFather)
+  (`/newbot` → имя → username) и вставить в `.env`; для webhook-режима в
+  BotFather privacy mode можно оставить по умолчанию — команды задаются через `/setcommands`;
+- заполнить секреты: пароли `POSTGRES_*`, `REDIS_*`, `RABBITMQ_*`, `BOT_TOKEN`,
+  `BACKEND_JWT_SECRET` (для prod — чек-лист `.env` ниже).
+
+### 3. Каталоги данных
+
+Каталоги хоста монтируются в контейнеры (БД, redis, rabbitmq, pdf, backups,
+certbot) — все выводятся из `PROJECT_DATA_DIR`:
+
+```bash
+mkdir -p /opt/universal-bot-constructor-data/{backups,certbot,db,pdf,rabbitmq,redis}
+mkdir -p /opt/universal-bot-constructor-data/certbot/{conf,www}
+```
+
+### 4. Запуск контейнеров — один из сценариев
 
 Окружение задаёт `PROJECT_ENVIRONMENT` (`loc` | `prod`): `docker-compose.yml`
 подключает `docker-compose.nginx.${PROJECT_ENVIRONMENT}.yml`.
 
+#### Сценарий loc (http, по умолчанию)
+
+```bash
+docker compose up -d --build   # все контейнеры за один запуск
+```
+
 - **loc** — 8 контейнеров: nginx (http :80, без SSL), frontend, backend, bot,
   postgres, pgbouncer, redis, rabbitmq;
-- **prod** — 9 контейнеров: + certbot; nginx — :80 (ACME + редирект) и :443 (TLS).
-
 - Админка: `http://universal-bot-constructor.loc/` (домен из `PROJECT_DOMAIN`, см. `/etc/hosts`)
 - API: `http://…/api/v1/health`, Swagger: `http://…/api/docs`
 
-### Администратор (после применения миграций)
+#### Сценарий prod (https)
+
+nginx (prod) не стартует без файлов сертификата, а certbot не пройдёт HTTP-01
+без работающего nginx, поэтому сначала поднимается всё, кроме nginx и certbot —
+их запускает `init-letsencrypt.sh` (это НЕ повторный запуск из loc-сценария):
+
+```bash
+# .env: PROJECT_ENVIRONMENT=prod, PROJECT_URL_SCHEME=https, PROJECT_DOMAIN, CERTBOT_EMAIL
+docker compose up -d --build postgres pgbouncer redis rabbitmq backend bot frontend
+./init-letsencrypt.sh --staging  # 1) проверка на тестовом CA (без лимитов)
+./init-letsencrypt.sh            # 2) боевой сертификат (staging заменяется автоматически)
+# --force — принудительный перевыпуск
+```
+
+- **prod** — 9 контейнеров: + certbot; nginx — :80 (ACME + редирект) и :443 (TLS).
+
+Продление автоматическое: certbot — `certbot renew` каждые 12 ч, nginx —
+`nginx -s reload` каждые 6 ч (`srv/nginx/docker-entrypoint.d/40-reload-certs.sh`).
+HSTS — `NGINX_STRICT_TRANSPORT_SECURITY_MAX_AGE=86400` (24 ч) на период ввода prod;
+после стабилизации — увеличить до `31536000` в `.env` (без правки шаблона) и
+пересоздать контейнер nginx (envsubst шаблонов выполняется при старте контейнера):
+
+```bash
+docker compose up -d --force-recreate nginx
+```
+
+### 5. Общие шаги для loc | prod
+
+#### Миграции (после запуска контейнеров)
+
+```bash
+# через docker
+docker compose -f docker-compose.dbupdate.yml run --rm db-update
+
+# локально (из корня проекта)
+PYTHONPATH=app/src POSTGRES_HOST=127.0.0.1 .venv/bin/alembic -c app/alembic.ini upgrade head
+
+# новая миграция (из каталога app/)
+PYTHONPATH=../app/src POSTGRES_HOST=127.0.0.1 ../.venv/bin/alembic revision -m "message"
+```
+
+#### Администратор (после применения миграций)
 
 ```bash
 # в docker (пароль запрашивается интерактивно)
@@ -82,21 +189,36 @@ PYTHONPATH=src POSTGRES_HOST=127.0.0.1 ../.venv/bin/python -m app.scripts.create
 Повторный запуск безопасен: существующий пользователь обновляется
 (пароль, роль, `is_active`). Коды выхода: 0 — успех, 1 — неверный ввод, 2 — ошибка БД.
 
-### SSL (prod)
+### 6. Проверка после установки
 
 ```bash
-# .env: PROJECT_ENVIRONMENT=prod, PROJECT_URL_SCHEME=https, PROJECT_DOMAIN, CERTBOT_EMAIL
-mkdir -p /data/universal-bot-constructor/certbot/{conf,www}   # ${CERTBOT_DATA_DIR}
-docker compose up -d --build postgres pgbouncer redis rabbitmq backend bot frontend
-./init-letsencrypt.sh --staging  # 1) проверка на тестовом CA (без лимитов)
-./init-letsencrypt.sh            # 2) боевой сертификат (staging заменяется автоматически)
-# --force — принудительный перевыпуск
+docker compose ps                        # все контейнеры Up/healthy
+docker compose logs --tail=50 backend    # без ошибок, "Application startup complete"
+docker compose logs --tail=50 bot        # бот подключился (polling/webhook)
+curl -fsS http://127.0.0.1/api/v1/health          # liveness
+curl -fsS http://127.0.0.1/api/v1/health/ready    # readiness (БД доступна)
 ```
 
-Продление автоматическое: certbot — `certbot renew` каждые 12 ч, nginx —
-`nginx -s reload` каждые 6 ч (`srv/nginx/docker-entrypoint.d/40-reload-certs.sh`).
-HSTS — `max-age=86400` (24 ч) на период ввода prod; после стабилизации —
-увеличить до `31536000` в `srv/nginx/templates/prod/ssl.conf.template`.
+- открыть админку (`http://…` / `https://…`), войти под созданным администратором;
+- написать боту в Telegram — должна прийти приветственная регистрация;
+- для prod: `curl -I https://<домен>/` — `308/301` редирект с http и валидный TLS.
+
+### Штатные операции
+
+```bash
+# логи сервиса (logs / logs -f)
+docker compose logs -f backend bot
+
+# обновление кода (то же пересоздаёт образы, тома данных не трогаются)
+git pull && docker compose up -d --build
+
+# остановка (данные сохраняются в PROJECT_DATA_DIR)
+docker compose down
+
+# бэкап данных: остановить сервисы и архивировать PROJECT_DATA_DIR
+# (для консистентной дампа БД использовать pg_dump из контейнера postgres)
+docker compose exec postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" | gzip > backup.sql.gz
+```
 
 ### Чек-лист `.env` для prod
 
@@ -108,22 +230,12 @@ HSTS — `max-age=86400` (24 ч) на период ввода prod; после �
 | `CORS_ORIGINS` | `["${PROJECT_URL_SCHEME}://${PROJECT_DOMAIN}"]` |
 | `SQLALCHEMY_DEBUG` | `False` (иначе SQL с параметрами — в логе) |
 | `BACKEND_JWT_SECRET` | `openssl rand -base64 64 \| tr -d '\n'` (≥ 32 байт) |
+| `BACKEND_WORKER_COUNT` | количество доступных CPU (см. «CPU (воркеры backend)») |
+| `BACKEND_CONTAINER_COMMAND` | `--workers ${BACKEND_WORKER_COUNT}` (не `--reload`) |
 | `BOT_WEBHOOK_BASE_URL` | `"${PROJECT_URL_SCHEME}://${PROJECT_DOMAIN}"` (пусто — long-polling) |
 | `BOT_WEBHOOK_SECRET` | `openssl rand -hex 32` — обязателен при webhook, формат `A-Z a-z 0-9 _ -` |
+| `NGINX_STRICT_TRANSPORT_SECURITY_MAX_AGE` | `86400` (24 ч) на период ввода prod, после стабилизации — `31536000` |
 | `POSTGRES_*`, `REDIS_*`, `RABBITMQ_*` пароли | сгенерированные, не из примера |
-
-### Миграции
-
-```bash
-# локально (из корня проекта)
-PYTHONPATH=app/src POSTGRES_HOST=127.0.0.1 .venv/bin/alembic -c app/alembic.ini upgrade head
-
-# новая миграция (из каталога app/)
-PYTHONPATH=../app/src POSTGRES_HOST=127.0.0.1 ../.venv/bin/alembic revision -m "message"
-
-# через docker
-docker compose -f docker-compose.dbupdate.yml run --rm db-update
-```
 
 ## Локальная разработка
 

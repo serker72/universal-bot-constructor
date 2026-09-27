@@ -118,6 +118,38 @@ mkdir -p /opt/universal-bot-constructor-data/{backups,certbot,db,pdf,rabbitmq,re
 mkdir -p /opt/universal-bot-constructor-data/certbot/{conf,www}
 ```
 
+### 3.1. Резервные копии PostgreSQL (сервис db-backup)
+
+Сервис `db-backup` (`docker-compose.srv.yml`, образ `postgres:16.14-alpine`,
+`srv/db-backup/entrypoint.sh`) поднимается вместе с инфраструктурой и ходит в
+`postgres` напрямую (не через pgbouncer — дамп это длинная сессия). Выполняет
+`pg_dump -Fc` (сжатый custom-формат, выборочное восстановление через
+`pg_restore`) и пишет дампы в хостовый `POSTGRES_BACKUPS_DIR` — тот же том,
+что примонтирован в `postgres`.
+
+| Переменная `.env` | Назначение |
+|---|---|
+| `POSTGRES_BACKUP_AT` | время ежедневного дампа `ЧЧ:ММ` по UTC (часовой пояс контейнера) |
+| `POSTGRES_BACKUP_KEEP` | сколько последних дампов хранить на каждую БД |
+| `POSTGRES_BACKUP_DATABASES` | список БД через пробел (по умолчанию — `POSTGRES_DB`) |
+
+Имена файлов — `<база>_ГГГГ-ММ-ДД_ЧЧММ.dump` (сортировка = хронология); лишние
+дампы удаляются после успешного дампа, при сбое дамп не пишется и ротация не
+выполняется.
+
+```bash
+# журнал сервиса (старт, время и размер каждого дампа, сбои)
+docker compose logs -f db-backup
+
+# состояние хранилища дампов на хосте
+ls -lh "$POSTGRES_BACKUPS_DIR"
+
+# восстановление из custom-дампа (БД должна существовать)
+docker compose exec -T postgres \
+  pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists \
+  /var/lib/postgresql/backups/<база>_<дата>_<время>.dump
+```
+
 ### 4. Запуск контейнеров — один из сценариев
 
 Окружение задаёт `PROJECT_ENVIRONMENT` (`loc` | `prod`): `docker-compose.yml`
@@ -129,8 +161,8 @@ mkdir -p /opt/universal-bot-constructor-data/certbot/{conf,www}
 docker compose up -d --build   # все контейнеры за один запуск
 ```
 
-- **loc** — 8 контейнеров: nginx (http :80, без SSL), frontend, backend, bot,
-  postgres, pgbouncer, redis, rabbitmq;
+- **loc** — 9 контейнеров: nginx (http :80, без SSL), frontend, backend, bot,
+  postgres, pgbouncer, redis, rabbitmq, db-backup (ежедневные дампы, см. ниже);
 - Админка: `http://universal-bot-constructor.loc/` (домен из `PROJECT_DOMAIN`, см. `/etc/hosts`)
 - API: `http://…/api/v1/health`, Swagger: `http://…/api/docs`
 
@@ -215,8 +247,8 @@ git pull && docker compose up -d --build
 # остановка (данные сохраняются в PROJECT_DATA_DIR)
 docker compose down
 
-# бэкап данных: остановить сервисы и архивировать PROJECT_DATA_DIR
-# (для консистентной дампа БД использовать pg_dump из контейнера postgres)
+# бэкап БД — автоматический: сервис db-backup (см. п. 3.1). Ручной снимок
+# перед миграцией схемы:
 docker compose exec postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" | gzip > backup.sql.gz
 ```
 
@@ -235,6 +267,8 @@ docker compose exec postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" | gzip >
 | `BOT_WEBHOOK_BASE_URL` | `"${PROJECT_URL_SCHEME}://${PROJECT_DOMAIN}"` (пусто — long-polling) |
 | `BOT_WEBHOOK_SECRET` | `openssl rand -hex 32` — обязателен при webhook, формат `A-Z a-z 0-9 _ -` |
 | `NGINX_STRICT_TRANSPORT_SECURITY_MAX_AGE` | `86400` (24 ч) на период ввода prod, после стабилизации — `31536000` |
+| `POSTGRES_BACKUP_AT` | время ежедневного дампа `ЧЧ:ММ` по UTC (например `03:15`) |
+| `POSTGRES_BACKUP_KEEP` | число хранимых дампов на БД (например `7`) |
 | `POSTGRES_*`, `REDIS_*`, `RABBITMQ_*` пароли | сгенерированные, не из примера |
 
 ## Локальная разработка

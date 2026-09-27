@@ -1155,6 +1155,52 @@ TS-интерфейсы моделей и name-by-id хелперы, булев�
 
 ---
 
+## Резервные копии PostgreSQL (сервис db-backup) — 27.09.2026
+
+**Задача:** ежедневные дампы БД в каталог `POSTGRES_BACKUPS_DIR`, хранение
+указанного числа копий; настройка только через `.env`.
+
+**Решение (вариант 1 — подтверждён):** отдельный sidecar-контейнер `db-backup`
+в `docker-compose.srv.yml` на том же образе `postgres:16.14-alpine`, что и
+`postgres` — `pg_dump`/`pg_restore` версии 16 всегда соответствуют серверу.
+
+- `srv/db-backup/entrypoint.sh` (POSIX sh, `set -eu`): цикл `sleep` до времени
+  `POSTGRES_BACKUP_AT` (`ЧЧ:ММ` по UTC контейнера), дамп каждой БД из
+  `PGDATABASES` (`pg_dump -Fc` — сжатый custom-формат, выборочное
+  восстановление `pg_restore`), ротация: оставить `POSTGRES_BACKUP_KEEP`
+  последних файлов на БД (`ls -1t | tail -n +KEEP+1 | xargs -r rm -f`) после
+  успешного дампа; при сбое — лог `dump FAILED`, неполный файл удаляется;
+  имена `<db>_ГГГГ-ММ-ДД_ЧЧММ.dump` (сортировка = хронология);
+  фоновый процесс — без `exec`-замены (не завершает контейнер при ошибке);
+- compose: `db-backup` зависит от `postgres` (`service_healthy`), сеть
+  `backend`; volumes — `POSTGRES_BACKUPS_DIR` (он же примонтирован в
+  `postgres`) + скрипт `:ro`; подключение `PGHOST=postgres` напрямую (не
+  через pgbouncer: дамп — длинная сессия, пулеру она ни к чему);
+  fail-fast `${POSTGRES_BACKUP_AT:?…}` / `${POSTGRES_BACKUP_KEEP:?…}`;
+  healthcheck не задан (контейнер почти всё время спит);
+- `.env.example`: `POSTGRES_BACKUP_AT=03:15`, `POSTGRES_BACKUP_KEEP=7`,
+  `POSTGRES_BACKUP_DATABASES` (комментарий; по умолчанию — `POSTGRES_DB`);
+- README: п. 3.1 (описание, таблица переменных, лог, восстановление), счётчик
+  контейнеров loc 8→9, ссылка в штатных операциях, две строки в чек-листе prod.
+
+**Проверка:**
+- `docker compose -f docker-compose.srv.yml config` — валиден, сервис
+  резолвится (переменные подставляются из `.env`);
+- функции скрипта в `postgres:16.14-alpine` (busybox): синтаксис `sh -n`;
+  `to_minutes` корректно для `09:08` (ведущие нули — dash не поддерживает
+  `10#`); `seconds_until` в диапазоне; ротация `ls -1t/tail/xargs` — из трёх
+  дампов с keep=2 остались два последних;
+- E2E на реальной postgres (одноразовый стенд, образ 16.14-alpine): `dump ok`
+  в лог; при недоступном сервере — `dump FAILED` без остаточного файла;
+  три прогона с keep=2 → остались два свежих; `pg_restore` в чистую БД — 100
+  строк таблицы;
+- **не менялись**: `settings.py`, приложения, `.gitignore`, пользовательский
+  `.env`.
+
+**Требование к `.env`:** сервис стартует только при заданных
+`POSTGRES_BACKUP_AT` и `POSTGRES_BACKUP_KEEP` (fail-fast в compose) —
+добавить в `.env` при первом запуске.
+
 ## Как использовать этот файл в новой сессии
 
 1. Откройте новый диалог.
@@ -1580,3 +1626,12 @@ TS-интерфейсы моделей и name-by-id хелперы, булев�
   - проверка: unit — 181 passed (ubc-test-runner на финальном коде);
     integration — повторный прогон отложен (пользовательское
     тестирование меню); бот пересобран и перезапущен.
+- **Резервные копии PostgreSQL** — выполнено (27.09.2026): сервис `db-backup`
+  (`docker-compose.srv.yml`, образ `postgres:16.14-alpine`, скрипт
+  `srv/db-backup/entrypoint.sh`: `pg_dump -Fc` ежедневно в `POSTGRES_BACKUP_AT`
+  по UTC в `POSTGRES_BACKUPS_DIR`, ротация `POSTGRES_BACKUP_KEEP`); блок
+  переменных в `.env.example`; README — п. 3.1, счётчик контейнеров loc,
+  чек-лист prod. Проверено: `compose config`, функции скрипта в busybox,
+  E2E-дамп и `pg_restore` на реальной postgres (одноразовый стенд).
+  В пользовательском `.env` добавить `POSTGRES_BACKUP_AT` /
+  `POSTGRES_BACKUP_KEEP` (fail-fast в compose).

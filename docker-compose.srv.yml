@@ -27,6 +27,36 @@ services:
       start_period: 10s
     # порты не публикуем наружу — только pgbouncer ходит в postgres
 
+  # --- Резервные копии PostgreSQL (см. srv/db-backup/entrypoint.sh) ---
+  # Тот же образ, что и у postgres: pg_dump версии 16 соответствует серверу.
+  # Дампы пишутся в тот же хостовый каталог POSTGRES_BACKUPS_DIR, что
+  # примонтирован в postgres; ротация — по числу копий POSTGRES_BACKUP_KEEP.
+  db-backup:
+    image: postgres:16.14-alpine
+    container_name: ubc-db-backup
+    restart: unless-stopped
+    environment:
+      # fail-fast: скрипт требует явные значения времени и глубины хранения
+      POSTGRES_BACKUP_AT: ${POSTGRES_BACKUP_AT:?POSTGRES_BACKUP_AT is required}
+      POSTGRES_BACKUP_KEEP: ${POSTGRES_BACKUP_KEEP:?POSTGRES_BACKUP_KEEP is required}
+      # дампим основную БД (при необходимости — список через пробел)
+      PGDATABASES: ${POSTGRES_BACKUP_DATABASES:-$POSTGRES_DB}
+      # pg_dump ходит в postgres напрямую (не через pgbouncer): дамп — длинная
+      # сессия, пулеру она ни к чему
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      BACKUP_DIR: /var/lib/postgresql/backups
+    volumes:
+      - ${POSTGRES_BACKUPS_DIR}:/var/lib/postgresql/backups
+      - ./srv/db-backup/entrypoint.sh:/usr/local/bin/ubc-db-backup-entrypoint.sh:ro
+    command: ["sh", "/usr/local/bin/ubc-db-backup-entrypoint.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - backend
+
   # --- PgBouncer ---
   pgbouncer:
     image: edoburu/pgbouncer:v1.24.1-p1

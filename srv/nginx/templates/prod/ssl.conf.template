@@ -56,8 +56,9 @@ server {
     # CSP: SPA и API на одном origin; inline-скрипт конфигурации Nuxt
     # и inline-стили Vue требуют 'unsafe-inline'
     add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" always;
-    # HSTS: 24 ч на период ввода prod; после стабилизации — 31536000 (1 год)
-    add_header Strict-Transport-Security "max-age=86400" always;
+    # HSTS: max-age — из .env (NGINX_STRICT_TRANSPORT_SECURITY_MAX_AGE):
+    # 86400 (24 ч) на период ввода prod, после стабилизации — 31536000 (1 год)
+    add_header Strict-Transport-Security "max-age=${NGINX_STRICT_TRANSPORT_SECURITY_MAX_AGE}" always;
 
     # Вход в админку: limit_req (зона ubc_login в nginx.conf)
     location = ${BACKEND_API_PREFIX}/auth/login {

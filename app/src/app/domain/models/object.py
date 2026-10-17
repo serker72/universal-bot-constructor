@@ -39,3 +39,9 @@ class Object(Base, TimestampMixin):
         secondary="object_managers",
         back_populates="managed_objects",
     )
+    # Точки продаж, к которым привязан объект (пусто = глобальный);
+    # только чтение, выборки — явными запросами репозиториев
+    points: Mapped[list["Point"]] = relationship(
+        secondary="point_objects",
+        viewonly=True,
+    )

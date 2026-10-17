@@ -6,8 +6,10 @@ from sqlalchemy import asc, select
 from sqlalchemy.orm import selectinload
 
 from app.domain.models import Category, CategoryManager, Object, ObjectManager
+from app.domain.models.point_object import PointObject
 from app.repository.base import BaseRepository
 from app.repository.manager_link import ManagerLinkMixin, link_entity
+from app.repository.point_scope import point_visible_condition
 
 
 class ObjectRepository(BaseRepository[Object], ManagerLinkMixin):
@@ -41,17 +43,35 @@ class ObjectRepository(BaseRepository[Object], ManagerLinkMixin):
             ),
         ]
 
+    @staticmethod
+    def point_condition(point_id: int):
+        """Условие «привязан к точке ИЛИ глобальный» (без is_active)."""
+        return point_visible_condition(
+            Object.id,
+            PointObject,
+            PointObject.object_id,
+            PointObject.point_id,
+            point_id,
+        )
+
+    def active_point_conditions(self, category_id: int, point_id: int) -> list:
+        """Условия «активный объект активной категории, видимый точке»."""
+        return [*self.active_conditions(category_id), self.point_condition(point_id)]
+
     async def list_by_category(
         self,
         category_id: int,
         *,
         only_active: bool = False,
+        point_id: int | None = None,
         limit: int | None = None,
         offset: int = 0,
     ) -> Sequence[Object]:
         """Объекты категории (для меню бота — только активные объекты
-        активной категории)."""
-        if only_active:
+        активной категории; point_id — локальные ∪ глобальные)."""
+        if only_active and point_id is not None:
+            conditions = self.active_point_conditions(category_id, point_id)
+        elif only_active:
             conditions = self.active_conditions(category_id)
         else:
             conditions = [Object.category_id == category_id]
@@ -61,6 +81,14 @@ class ObjectRepository(BaseRepository[Object], ManagerLinkMixin):
             offset=offset,
             order_by=asc(Object.sort_order),
         )
+
+    async def is_visible_for_point(self, object_id: int, point_id: int) -> bool:
+        """Видим ли объект для точки (привязан к ней ИЛИ глобальный)."""
+        count = await self.count(
+            Object.id == object_id,
+            self.point_condition(point_id),
+        )
+        return count > 0
 
     async def list_access_manager_ids(self, object_id: int) -> list[int]:
         """Id менеджеров с доступом к объекту: прямые связи ∪ менеджеры

@@ -57,6 +57,26 @@ class MenuCB(CallbackData, prefix="menu"):
     """Возврат в главное меню (список категорий)."""
 
 
+class PointSelectCB(CallbackData, prefix="pt"):
+    """Выбор точки из селектора."""
+
+    point_id: int
+
+
+class PointListCB(CallbackData, prefix="ptlist"):
+    """Пагинация селектора точек."""
+
+    page: int = 0
+
+
+class ChangePointCB(CallbackData, prefix="ptchange"):
+    """Кнопка «Сменить филиал» в меню."""
+
+
+class PointCancelCB(CallbackData, prefix="ptcancel"):
+    """Отмена выбора точки (возврат в меню)."""
+
+
 def _add_pager(
     builder: InlineKeyboardBuilder,
     *,
@@ -99,8 +119,12 @@ def request_cancelled_keyboard():
     return builder.as_markup()
 
 
-def categories_keyboard(items, page: int, total: int):
-    """Главное меню: список категорий с пагинацией (1 кнопка в строке)."""
+def categories_keyboard(items, page: int, total: int, show_change_point: bool = False):
+    """Главное меню: список категорий с пагинацией (1 кнопка в строке).
+
+    ``show_change_point`` — добавить кнопку «Сменить филиал» (показывается
+    только при >1 активной точке; вычисляется в хендлере).
+    """
     builder = InlineKeyboardBuilder()
     for cat in items:
         builder.button(
@@ -118,6 +142,12 @@ def categories_keyboard(items, page: int, total: int):
     builder.row(
         types.InlineKeyboardButton(text="📋 Мои заявки", callback_data=RequestCB().pack())
     )
+    if show_change_point:
+        builder.row(
+            types.InlineKeyboardButton(
+                text="🏳 Сменить филиал", callback_data=ChangePointCB().pack()
+            )
+        )
     return builder.as_markup()
 
 
@@ -218,5 +248,43 @@ def request_details_keyboard(request_id: int, can_cancel: bool):
     )
     builder.row(
         types.InlineKeyboardButton(text="🏠 Главное меню", callback_data=MenuCB().pack())
+    )
+    return builder.as_markup()
+
+
+def points_keyboard(
+    items: list,
+    page: int,
+    total: int,
+    current_point_id: int | None = None,
+) -> types.InlineKeyboardMarkup:
+    """Селектор точек: кнопки с наименованием и адресом.
+
+    ``current_point_id`` — выбранная точка (отмечается «✅»); None — не отмечать.
+    Текст кнопки усекается до 64 символов (лимит Telegram).
+    """
+    builder = InlineKeyboardBuilder()
+    for pt in items:
+        text = f"{pt.name} — {pt.address}"
+        if len(text) > 64:
+            text = text[:61] + "…"
+        if pt.id == current_point_id:
+            text = f"✅ {text}"
+        builder.button(
+            text=text,
+            callback_data=PointSelectCB(point_id=pt.id).pack(),
+        )
+    builder.adjust(1)
+    _add_pager(
+        builder,
+        page=page,
+        total=total,
+        prev_cb=PointListCB(page=page - 1).pack(),
+        next_cb=PointListCB(page=page + 1).pack(),
+    )
+    builder.row(
+        types.InlineKeyboardButton(
+            text="✖️ Отмена", callback_data=PointCancelCB().pack()
+        )
     )
     return builder.as_markup()

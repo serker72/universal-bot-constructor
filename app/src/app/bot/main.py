@@ -20,10 +20,11 @@ from dishka.integrations.aiogram import setup_dishka
 from faststream.rabbit import RabbitBroker
 
 from app.bot.dialogs.dynamic_request_dialog import dialog as request_dialog
-from app.bot.handlers import menu, registration, requests
+from app.bot.handlers import menu, points, registration, requests
 from app.bot.middlewares import (
     BlockedVisitorMiddleware,
     CommitBeforeTelegramMiddleware,
+    PointMiddleware,
     UpdateContainerMiddleware,
 )
 from app.bot.notifications import register_notification_consumers
@@ -93,6 +94,7 @@ async def run() -> None:
             )
         )
         dp.include_router(registration.router)
+        dp.include_router(points.router)
         dp.include_router(menu.router)
         dp.include_router(requests.router)
         # диалог создания заявки (aiogram-dialog) — после обычных роутеров
@@ -104,6 +106,7 @@ async def run() -> None:
         for observer in (dp.message, dp.callback_query):
             observer.outer_middleware(UpdateContainerMiddleware())
             observer.outer_middleware(BlockedVisitorMiddleware())
+            observer.outer_middleware(PointMiddleware())
         bot.session.middleware(CommitBeforeTelegramMiddleware())
         # middleware aiogram-dialog (DialogManager в хендлерах/виджетах)
         setup_dialogs(dp)

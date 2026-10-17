@@ -5,10 +5,11 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.models import Category, Object, Request, RequestStatus, Visitor
+from app.domain.models import Category, Object, Point, Request, RequestStatus, Visitor
 from app.domain.models.request_field_value import VALUE_TEXT_MAX_LENGTH
 from app.repository.category import CategoryRepository
 from app.repository.object import ObjectRepository
+from app.repository.point import PointRepository
 from app.repository.request import RequestRepository
 from app.repository.request_field import RequestFieldRepository
 from app.repository.visitor import VisitorRepository
@@ -38,6 +39,7 @@ class BotService:
         visitors: VisitorRepository,
         categories: CategoryRepository,
         objects: ObjectRepository,
+        points: PointRepository,
         requests: RequestRepository,
         request_fields: RequestFieldRepository,
         app_settings: AppSettingsService,
@@ -47,6 +49,7 @@ class BotService:
         self.visitors = visitors
         self.categories = categories
         self.objects = objects
+        self.points = points
         self.requests = requests
         self.request_fields = request_fields
         self.app_settings = app_settings
@@ -121,41 +124,115 @@ class BotService:
         visitor.phone = phone
         await self.session.flush()
 
+    # -- точки продаж -------------------------------------------------------
+
+    async def count_active_points(self) -> int:
+        """Количество активных точек (определяет сценарий выбора)."""
+        return await self.points.count_active()
+
+    async def list_active_points(
+        self, page: int
+    ) -> tuple[list[Point], int, int]:
+        """Страница активных точек для селектора: (элементы, страниц, номер)."""
+        page_size = await self.app_settings.get_page_size()
+        total = await self.points.count_active()
+        pages = _pages(total, page_size)
+        page = _clamp_page(page, pages)
+        items = await self.points.list_active(
+            limit=page_size, offset=page * page_size
+        )
+        return list(items), pages, page
+
+    async def get_active_point(self, point_id: int) -> Point | None:
+        """Активная точка по id (неактивная — None)."""
+        return await self.points.get_active(point_id)
+
+    async def set_visitor_point(
+        self, telegram_id: int, point_id: int | None
+    ) -> None:
+        """Зафиксировать/сбросить точку посетителя (источник — visitors.point_id)."""
+        visitor = await self.get_visitor(telegram_id)
+        if visitor is None:
+            raise BotServiceError("Посетитель не найден")
+        visitor.point_id = point_id
+        await self.session.flush()
+        await self.session.commit()
+
     # -- меню ---------------------------------------------------------------
 
-    async def list_categories(self, page: int) -> tuple[list[Category], int, int]:
+    async def list_categories(
+        self, page: int, point_id: int | None = None
+    ) -> tuple[list[Category], int, int]:
         """Страница активных категорий: (элементы, всего страниц, номер страницы).
 
+        point_id — фильтр «локальные точки ∪ глобальные»; без точки — все.
         Номер страницы ограничивается диапазоном 0..pages-1.
         """
         page_size = await self.app_settings.get_page_size()
-        total = await self.categories.count(Category.is_active.is_(True))
+        if point_id is None:
+            total = await self.categories.count(Category.is_active.is_(True))
+        else:
+            total = await self.categories.count_active_for_point(point_id)
         pages = _pages(total, page_size)
         page = _clamp_page(page, pages)
-        items = await self.categories.list_active(limit=page_size, offset=page * page_size)
+        offset = page * page_size
+        if point_id is None:
+            items = await self.categories.list_active(
+                limit=page_size, offset=offset
+            )
+        else:
+            items = await self.categories.list_active_for_point(
+                point_id, limit=page_size, offset=offset
+            )
         return list(items), pages, page
 
     async def list_objects(
-        self, category_id: int, page: int
+        self, category_id: int, page: int, point_id: int | None = None
     ) -> tuple[list[Object], int, int]:
-        """Страница активных объектов активной категории: (элементы, страниц, номер)."""
+        """Страница активных объектов активной категории: (элементы, страниц, номер).
+
+        point_id — фильтр «локальные точки ∪ глобальные»; без точки — все.
+        """
         page_size = await self.app_settings.get_page_size()
-        total = await self.objects.count(
-            *self.objects.active_conditions(category_id)
+        conditions = (
+            self.objects.active_conditions(category_id)
+            if point_id is None
+            else self.objects.active_point_conditions(category_id, point_id)
         )
+        total = await self.objects.count(*conditions)
         pages = _pages(total, page_size)
         page = _clamp_page(page, pages)
         items = await self.objects.list_by_category(
-            category_id, only_active=True, limit=page_size, offset=page * page_size
+            category_id,
+            only_active=True,
+            point_id=point_id,
+            limit=page_size,
+            offset=page * page_size,
         )
         return list(items), pages, page
 
-    async def get_object(self, object_id: int) -> Object | None:
-        """Активный объект активной категории (вместе с категорией — для текста кнопки)."""
+    async def get_object(
+        self, object_id: int, point_id: int | None = None
+    ) -> Object | None:
+        """Активный объект активной категории (вместе с категорией — для текста кнопки).
+
+        point_id — дополнительная проверка видимости точки: недоступный
+        филиалу объект возвращается как None.
+        """
         obj = await self.objects.get_with_category(object_id)
-        if obj is not None and obj.is_active and obj.category.is_active:
-            return obj
-        return None
+        if obj is None or not obj.is_active or not obj.category.is_active:
+            return None
+        if point_id is not None and not await self.objects.is_visible_for_point(
+            object_id, point_id
+        ):
+            return None
+        return obj
+
+    async def is_object_visible(self, object_id: int, point_id: int | None) -> bool:
+        """Доступен ли объект выбранной точке (глобальные — доступны всем)."""
+        if point_id is None:
+            return True
+        return await self.objects.is_visible_for_point(object_id, point_id)
 
     async def save_pdf_file_id(
         self, object_id: int, pdf_path: str, file_id: str
@@ -216,9 +293,11 @@ class BotService:
         Вставка выполняется (flush) до публикации события: ошибка БД не
         приводит к уведомлению о несуществующей заявке.
         """
-        obj = await self.get_object(object_id)
+        obj = await self.get_object(object_id, visitor.point_id)
         if obj is None:
-            raise BotServiceError("Объект не найден")
+            raise BotServiceError(
+                "Объект не найден или недоступен в выбранном филиале"
+            )
         too_long = [
             field_id
             for field_id, value in values.items()

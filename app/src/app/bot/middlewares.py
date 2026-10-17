@@ -7,7 +7,9 @@
   при pool_mode=transaction pgbouncer не держит серверное соединение на время
   сетевого I/O с Telegram (commit в финализаторе был бы уже после ответа);
 - BlockedVisitorMiddleware (outer) — заблокированный посетитель не может
-  пользоваться меню (в т.ч. по старым кнопкам): карточка объекта, PDF, заявки.
+  пользоваться меню (в т.ч. по старым кнопкам): карточка объекта, PDF, заявки;
+- PointMiddleware (outer) — при >1 активной точке и выбранной point_id=None
+  redirect в селектор (кроме /start и callback'ов селектора).
 """
 
 from collections.abc import Awaitable, Callable
@@ -26,6 +28,12 @@ from dishka import AsyncContainer
 from dishka.integrations.aiogram import CONTAINER_NAME
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.keyboards import (
+    ChangePointCB,
+    PointCancelCB,
+    PointListCB,
+    PointSelectCB,
+)
 from app.bot.services import BotService
 
 BLOCKED_TEXT = "🚫 Вы заблокированы. Обратитесь к администрации."
@@ -93,5 +101,50 @@ class BlockedVisitorMiddleware(BaseMiddleware):
                 await event.answer("Вы заблокированы", show_alert=True)
             elif isinstance(event, Message):
                 await event.answer(BLOCKED_TEXT)
+            return None
+        return await handler(event, data)
+
+
+class PointMiddleware(BaseMiddleware):
+    """При >1 активной точке и point_id=None редирект в селектор (кроме /start
+    и callback'ов самого селектора)."""
+
+    # префиксы callback'ов, которые не нужно перехватывать
+    _PT_PREFIXES = tuple(
+        cb.__prefixed__().prefix + ":"
+        for cb in (ChangePointCB, PointSelectCB, PointListCB, PointCancelCB)
+    )
+
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: dict[str, Any],
+    ) -> Any:
+        user = getattr(event, "from_user", None)
+        container: AsyncContainer | None = data.get(CONTAINER_NAME)
+        if user is None or container is None:
+            return await handler(event, data)
+        # /start обрабатывает cmd_start сам
+        if isinstance(event, Message) and (event.text or "").startswith("/start"):
+            return await handler(event, data)
+        # callback'и селектора — пропускаем (обработчик сам всё сделает)
+        if isinstance(event, CallbackQuery):
+            cb_data = event.data or ""
+            if any(cb_data.startswith(p) for p in self._PT_PREFIXES):
+                return await handler(event, data)
+        service = await container.get(BotService)
+        visitor = await service.get_visitor(user.id)
+        if visitor is None or visitor.is_blocked:
+            # регистрация/блокировка — пусть обрабатывает другой хендлер
+            return await handler(event, data)
+        # точка выбрана — пропускаем
+        if visitor.point_id is not None:
+            return await handler(event, data)
+        # несколько точек и нет выбранной — в селектор
+        if await service.count_active_points() > 1:
+            from app.bot.handlers.points import _show_selector
+
+            await _show_selector(event, service, data["state"], data["dialog_manager"], page=0)  # type: ignore[union-attr]
             return None
         return await handler(event, data)

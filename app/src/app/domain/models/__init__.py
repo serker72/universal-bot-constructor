@@ -5,6 +5,9 @@ from app.domain.models.category_manager import CategoryManager
 from app.domain.models.device import Device
 from app.domain.models.object import Object
 from app.domain.models.object_manager import ObjectManager
+from app.domain.models.point import Point
+from app.domain.models.point_category import PointCategory
+from app.domain.models.point_object import PointObject
 from app.domain.models.request import Request, RequestStatus
 from app.domain.models.request_category_field import RequestCategoryField
 from app.domain.models.request_field import RequestAvailableField, RequestFieldType
@@ -20,6 +23,9 @@ __all__ = [
     "Device",
     "Object",
     "ObjectManager",
+    "Point",
+    "PointCategory",
+    "PointObject",
     "Request",
     "RequestCategoryField",
     "RequestAvailableField",

@@ -33,3 +33,9 @@ class Category(Base, TimestampMixin):
         secondary="category_managers",
         back_populates="managed_categories",
     )
+    # Точки продаж, к которым привязана категория (пусто = глобальная);
+    # только чтение, выборки — явными запросами репозиториев
+    points: Mapped[list["Point"]] = relationship(
+        secondary="point_categories",
+        viewonly=True,
+    )

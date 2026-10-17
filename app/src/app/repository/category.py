@@ -5,8 +5,10 @@ from collections.abc import Sequence
 from sqlalchemy import asc, select
 
 from app.domain.models import Category, CategoryManager, Object, ObjectManager
+from app.domain.models.point_category import PointCategory
 from app.repository.base import BaseRepository
 from app.repository.manager_link import ManagerLinkMixin, link_entity
+from app.repository.point_scope import point_visible_condition
 
 
 class CategoryRepository(BaseRepository[Category], ManagerLinkMixin):
@@ -23,6 +25,34 @@ class CategoryRepository(BaseRepository[Category], ManagerLinkMixin):
             limit=limit,
             offset=offset,
             order_by=asc(Category.sort_order),
+        )
+
+    def point_condition(self, point_id: int):
+        """Условие «привязана к точке ИЛИ глобальная» (без is_active)."""
+        return point_visible_condition(
+            Category.id,
+            PointCategory,
+            PointCategory.category_id,
+            PointCategory.point_id,
+            point_id,
+        )
+
+    async def list_active_for_point(
+        self, point_id: int, *, limit: int | None = None, offset: int = 0
+    ) -> Sequence[Category]:
+        """Активные категории для точки: локальные ∪ глобальные."""
+        return await self.find(
+            Category.is_active.is_(True),
+            self.point_condition(point_id),
+            limit=limit,
+            offset=offset,
+            order_by=asc(Category.sort_order),
+        )
+
+    async def count_active_for_point(self, point_id: int) -> int:
+        """Количество активных категорий для точки (total пагинации)."""
+        return await self.count(
+            Category.is_active.is_(True), self.point_condition(point_id)
         )
 
     async def list_manager_category_ids(self, user_id: int) -> list[int]:

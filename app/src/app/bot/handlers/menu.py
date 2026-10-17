@@ -13,6 +13,7 @@ from dishka.integrations.aiogram import FromDishka
 from app.bot.html_sanitize import sanitize_html
 from app.bot.keyboards import (
     CategoryCB,
+    ChangePointCB,
     MenuCB,
     ObjectActionCB,
     ObjectCB,
@@ -31,6 +32,7 @@ router = Router(name="menu")
 log = get_logger(__name__)
 
 CATEGORIES_TEXT = "Выберите категорию:"
+CHANGE_POINT_TEXT = "🏳 Сменить филиал"
 
 
 async def ensure_visitor(
@@ -50,16 +52,28 @@ async def ensure_visitor(
 
 
 async def send_categories_menu(
-    message: Message, bot_service: BotService, *, page: int = 0, edit: bool = False
+    message: Message,
+    bot_service: BotService,
+    *,
+    page: int = 0,
+    edit: bool = False,
+    point_id: int | None = None,
 ) -> None:
-    """Меню категорий (страница page): новое сообщение или правка текущего."""
-    items, pages, page = await bot_service.list_categories(page)
+    """Меню категорий (страница page): новое сообщение или правка текущего.
+
+    Если точек > 1 — добавляется кнопка «Сменить филиал».
+    """
+    items, pages, page = await bot_service.list_categories(page, point_id)
+    # определяем, показывать кнопку «Сменить филиал»
+    show_change = await bot_service.count_active_points() > 1
     if not items:
         # нет активных категорий: возвращать некуда (кнопки «Категории»/
         # «Главное меню» вели бы на это же сообщение) — только текст
         text, markup = "Категории пока не добавлены.", None
     else:
-        text, markup = CATEGORIES_TEXT, categories_keyboard(items, page, pages)
+        text, markup = CATEGORIES_TEXT, categories_keyboard(
+            items, page, pages, show_change_point=show_change
+        )
     if edit:
         await message.edit_text(text, reply_markup=markup)
     else:
@@ -70,9 +84,12 @@ async def _show_objects_page(
     callback: CallbackQuery, bot_service: BotService, category_id: int, page: int
 ) -> None:
     """Страница объектов категории (общая для выбора категории и «К объектам»)."""
-    if not await ensure_visitor(callback, bot_service):
+    visitor = await ensure_visitor(callback, bot_service)
+    if visitor is None:
         return
-    items, pages, page = await bot_service.list_objects(category_id, page)
+    items, pages, page = await bot_service.list_objects(
+        category_id, page, visitor.point_id
+    )
     if not items:
         # «◀️ Категории» не нужен: список категорий — это и есть главное меню
         await callback.message.edit_text(  # type: ignore[union-attr]
@@ -99,9 +116,12 @@ async def show_main_menu(
     bot_service: FromDishka[BotService],
 ) -> None:
     """Главное меню: список активных категорий (первая страница)."""
-    if not await ensure_visitor(callback, bot_service):
+    visitor = await ensure_visitor(callback, bot_service)
+    if visitor is None:
         return
-    await send_categories_menu(callback.message, bot_service, edit=True)  # type: ignore[arg-type]
+    await send_categories_menu(
+        callback.message, bot_service, edit=True, point_id=visitor.point_id  # type: ignore[arg-type]
+    )
     await callback.answer()
 
 
@@ -112,13 +132,15 @@ async def show_categories(
     bot_service: FromDishka[BotService],
 ) -> None:
     """Список активных категорий (с пагинацией)."""
-    if not await ensure_visitor(callback, bot_service):
+    visitor = await ensure_visitor(callback, bot_service)
+    if visitor is None:
         return
     await send_categories_menu(
         callback.message,  # type: ignore[arg-type]
         bot_service,
         page=callback_data.page,
         edit=True,
+        point_id=visitor.point_id,
     )
     await callback.answer()
 
@@ -156,11 +178,19 @@ async def show_object(
 ) -> None:
     """Страница объекта: наименование, описание, PDF, заявка."""
     assert callback_data.object_id is not None  # гарантировано фильтром
-    if not await ensure_visitor(callback, bot_service):
+    visitor = await ensure_visitor(callback, bot_service)
+    if visitor is None:
         return
     obj = await bot_service.get_object(callback_data.object_id)
     if obj is None:
         await callback.answer("Объект не найден", show_alert=True)
+        return
+    if not await bot_service.is_object_visible(obj.id, visitor.point_id):
+        await callback.answer(
+            "Объект недоступен в выбранном филиале.\n"
+            "Смените филиал в главном меню.",
+            show_alert=True,
+        )
         return
     text = (
         f"<b>{html.quote(obj.name)}</b>\n\n"
@@ -207,6 +237,13 @@ async def send_pdf(
     obj = await bot_service.get_object(callback_data.object_id)
     if obj is None or not obj.pdf_path:
         await callback.answer("PDF не загружен", show_alert=True)
+        return
+    if not await bot_service.is_object_visible(
+        obj.id, (await bot_service.get_visitor(callback.from_user.id)).point_id  # type: ignore[union-attr]
+    ):
+        await callback.answer(
+            "Объект недоступен в выбранном филиале.", show_alert=True
+        )
         return
     await callback.answer()
     if obj.telegram_file_id:

@@ -33,6 +33,46 @@ if config.config_file_name is not None:
 # Метаданные моделей для autogenerate
 target_metadata = Base.metadata
 
+# Комментарии колонок/таблиц задаются только в миграциях (в моделях не
+# дублируются). Плагин autogenerate сравнения комментариев (alembic 1.16+)
+# всегда срабатывает и шумит в `alembic check`. Хук
+# `process_revision_directives` очищает комментарии из операций, чтобы check
+# оставался чистым индикатором структурных отличий.
+
+
+def _strip_comment_ops(ops_list: list) -> None:
+    """Убрать операции с комментариями из списка ops (рекурсивно для ModifyTableOps)."""
+    from alembic.operations.ops import (
+        AlterColumnOp,
+        CreateTableCommentOp,
+        DropTableCommentOp,
+        ModifyTableOps,
+    )
+
+    kept = []
+    for op in ops_list:
+        if isinstance(op, (CreateTableCommentOp, DropTableCommentOp)):
+            continue
+        if isinstance(op, ModifyTableOps):
+            _strip_comment_ops(op.ops)
+            if op.ops:
+                kept.append(op)
+            continue
+        if isinstance(op, AlterColumnOp) and op.modify_comment is not False:
+            # комментарий — не единственное изменение колонки?
+            op.modify_comment = False
+            if not op.to_diff_tuple():
+                continue
+        kept.append(op)
+    ops_list[:] = kept
+
+
+def _filter_comment_ops(context_, revision_map, revision_directions) -> None:
+    """Исключить операции с комментариями из autogenerate/check."""
+    for direction in revision_directions:
+        _strip_comment_ops(direction.upgrade_ops.ops)
+        _strip_comment_ops(direction.downgrade_ops.ops)
+
 
 def run_migrations_offline() -> None:
     """Офлайн-режим: генерация SQL без подключения к БД."""
@@ -42,6 +82,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        process_revision_directives=_filter_comment_ops,
     )
 
     with context.begin_transaction():
@@ -50,7 +91,11 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection: Connection) -> None:
     """Выполнение миграций в синхронном контексте подключения."""
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        process_revision_directives=_filter_comment_ops,
+    )
     with context.begin_transaction():
         context.run_migrations()
 

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repository.category import CategoryRepository
 from app.repository.device import DeviceRepository
 from app.repository.object import ObjectRepository
+from app.repository.point import PointRepository
 from app.repository.request import RequestRepository
 from app.repository.request_field import RequestFieldRepository
 from app.repository.session import SessionRepository
@@ -54,3 +55,7 @@ class RepositoryProvider(Provider):
     @provide(scope=Scope.REQUEST)
     def provide_setting_repo(self, session: AsyncSession) -> SettingRepository:
         return SettingRepository(session)
+
+    @provide(scope=Scope.REQUEST)
+    def provide_point_repo(self, session: AsyncSession) -> PointRepository:
+        return PointRepository(session)

@@ -2,6 +2,7 @@
 
 from aiogram import F, Router
 from aiogram import html
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -9,6 +10,7 @@ from aiogram_dialog import DialogManager
 from dishka.integrations.aiogram import FromDishka
 
 from app.bot.handlers.menu import send_categories_menu
+from app.bot.handlers.points import resolve_point_flow
 from app.bot.html_sanitize import sanitize_html
 from app.bot.keyboards import ConsentCB, consent_keyboard
 from app.bot.middlewares import BLOCKED_TEXT
@@ -26,13 +28,16 @@ async def cmd_start(
     dialog_manager: DialogManager,
     bot_service: FromDishka[BotService],
 ) -> None:
-    """Точка входа: регистрация / блокировка / главное меню."""
+    """Точка входа: регистрация / блокировка / главное меню / выбор точки."""
     await state.clear()
     # незавершённый диалог заявки (aiogram-dialog, свой стек в Redis) —
     # сбросить, иначе следующий текст уйдёт в MessageInput старого окна
     await dialog_manager.reset_stack()
     visitor = await bot_service.get_visitor(message.from_user.id)  # type: ignore[union-attr]
+    # парсинг deep link: /start point_3 → arg_point_id=3
+    arg_point_id = _parse_point_arg(message.command_args)
     if visitor is None:
+        # незарегистрирован — выбираем ФИО, потом точку
         await state.set_state(RegistrationStates.full_name)
         welcome = await bot_service.app_settings.get_welcome_text()
         prompt = "Введите ваше ФИО (полностью):"
@@ -42,7 +47,28 @@ async def cmd_start(
     if visitor.is_blocked:
         await message.answer(BLOCKED_TEXT)
         return
-    await _show_main_menu(message, bot_service)
+    # зарегистрирован — резолвим точку
+    show_selector = await resolve_point_flow(
+        message, bot_service, arg_point_id, state, dialog_manager
+    )
+    if not show_selector:
+        await _show_main_menu(message, bot_service)
+
+
+def _parse_point_arg(arg: str | None) -> int | None:
+    """Парсинг deep link аргумента: 'point_3' → 3.
+
+    Возвращает None если аргумент пустой/невалидный/не относится к точкам.
+    """
+    if not arg:
+        return None
+    prefix = "point_"
+    if not arg.startswith(prefix):
+        return None
+    try:
+        return int(arg[len(prefix):])
+    except ValueError:
+        return None
 
 
 @router.message(RegistrationStates.full_name, F.text)
@@ -119,4 +145,7 @@ async def _show_main_menu(message: Message, bot_service: BotService) -> None:
     welcome = await bot_service.app_settings.get_welcome_text()
     if welcome:
         await message.answer(sanitize_html(welcome))
-    await send_categories_menu(message, bot_service)
+    visitor = await bot_service.get_visitor(message.from_user.id)  # type: ignore[union-attr]
+    await send_categories_menu(
+        message, bot_service, point_id=visitor.point_id if visitor else None
+    )

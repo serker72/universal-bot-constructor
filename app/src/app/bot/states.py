@@ -11,6 +11,17 @@ class RegistrationStates(StatesGroup):
     consent = State()
 
 
+class PointStates(StatesGroup):
+    """Выбор точки продаж (селектор).
+
+    Источник истины о выбранной точке — колонка visitors.point_id;
+    состояние используется только как маркер «режим выбора», чтобы
+    скрыть меню пока пользователь не выбрал филиал.
+    """
+
+    choose = State()
+
+
 class DynamicRequestSG(StatesGroup):
     """Создание заявки (динамический конструктор, aiogram-dialog).
 

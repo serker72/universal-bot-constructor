@@ -1201,6 +1201,303 @@ TS-интерфейсы моделей и name-by-id хелперы, булев�
 `POSTGRES_BACKUP_AT` и `POSTGRES_BACKUP_KEEP` (fail-fast в compose) —
 добавить в `.env` при первом запуске.
 
+## Внедрение точек продаж (филиалы)
+
+> Новая сущность «Точка продаж» (филиал): привязка категорий и объектов к точкам,
+> выбор точки посетителем в боте (deep link / селектор), фильтрация меню по
+> выбранной точке, график работы и часовой пояс точки при выборе даты и времени
+> заявки.
+>
+> **Статус: в процессе.** Пункты 1–2 выполнены (17.10.2026), пункты 3–6 —
+> план. Решения по хранению (visitors.point_id — вариант B), времени заявки
+> (местное время точки — A) и границам часов (begin <= h:00 < end — A) приняты.
+
+### 1. База данных и миграции (SQLAlchemy)
+
+**Статус: выполнено (17.10.2026).** Миграции `a1b2c3d4e5f1` (points),
+`a1b2c3d4e5f2` (point_categories), `a1b2c3d4e5f3` (point_objects),
+`a1b2c3d4e5f4` (visitors.point_id) — применены к основной и тестовой БД;
+`alembic check` чист (в `alembic/env.py` добавлен хук `_filter_comment_ops`,
+исключающий операции с комментариями из autogenerate/check).
+
+**Новая таблица `points`** — модель `Point` (`app/src/app/domain/models/point.py`,
+`Base + TimestampMixin`, как у `Category`):
+
+| Колонка | Тип | Назначение |
+|---|---|---|
+| `id` | Integer PK | идентификатор точки |
+| `name` | String(128), not null | название точки («Центральный офис») |
+| `address` | String(255), not null | адрес (показывается в селекторе точек) |
+| `timezone` | String(64), not null, default `Europe/Moscow` | таймзона IANA (`Asia/Yekaterinburg`) |
+| `work_interval_begin` | Time, not null, default `09:00` | начало рабочего дня |
+| `work_interval_end` | Time, not null, default `19:00` | окончание рабочего дня |
+| `is_active` | Boolean, not null, default `true` | статус (неактивная — вне селектора и фильтрации) |
+| `created_at`, `updated_at` | TimestampMixin | как у остальных моделей |
+
+**Таблицы связей many-to-many** (паттерн `category_managers`: суррогатный `id`
+PK + два FK + уникальный индекс пары):
+
+- **`point_categories`** — `id` PK, `point_id` FK → points (CASCADE),
+  `category_id` FK → categories (CASCADE), уникальный индекс
+  `(point_id, category_id)`, индексы по обоим полям;
+- **`point_objects`** — `id` PK, `point_id` FK → points (CASCADE),
+  `object_id` FK → objects (CASCADE), уникальный индекс
+  `(point_id, object_id)`, индексы по обоим полям.
+
+Связи домена: `Point.categories` / `Point.objects` (secondary), обратные
+`Category.points` / `Object.points` — `lazy="selectin"` не включать (исключить
+лишние load'ы в списке), только явные запросы репозиториев.
+
+**Логика «глобального» контента (отображение без привязки).** Запись считается
+доступной точке, если она привязана к этой точке **ЛИБО** вообще не имеет ни
+одной записи в таблице связей (тогда она общая для всех точек). Условие —
+одна пара `EXISTS`/`NOT EXISTS`, применяется и для категорий, и для объектов:
+
+```python
+# категории для точки point_id
+linked_here = exists(
+    select(1).where(PointCategory.category_id == Category.id,
+                    PointCategory.point_id == point_id)
+)
+not_linked_at_all = ~exists(select(1).where(PointCategory.category_id == Category.id))
+condition = and_(linked_here | not_linked_at_all)
+```
+
+Правила крайних случаев:
+
+- `point_id is None` (точка не выбрана / точка в БД одна и не зафиксирована) —
+  выборка без фильтра: только глобальный контент **не** выделяется отдельно,
+  отдаются все активные записи (прежнее поведение, обратная совместимость);
+- `is_active` точки и `is_active` категории/объекта — И с условием выше;
+- объект виден только если видна и его категория (фильтр «активная категория»
+  из `ObjectRepository.active_conditions` сохраняется).
+
+**Привязка посетителя к точке** — колонка **`visitors.point_id`**
+(Integer, FK → points, `ON DELETE SET NULL`, nullable): источник истины о
+выбранной точке (решение по хранению — вариант B, см. п. 2). `SET NULL`, а не
+`CASCADE`: удаление точки не должно удалять посетителя; после удаления точка
+равна `NULL` → при следующем `/start` бот предложит выбрать филиал.
+
+**Миграция alembic** — одна ревизия: 3 таблицы (`points`, `point_categories`,
+`point_objects`) + колонка `visitors.point_id` с FK и индексом; откат —
+reverse-порядок (сначала `drop_column`, потом таблицы). Создание/применение по
+инструкции раздела «Миграции» (`alembic` в корневой `.venv`,
+`PYTHONPATH=app/src`, `POSTGRES_HOST=127.0.0.1`; затем `db-update-test` для
+тестовой БД).
+
+### 2. Команда /start: deep link и выбор точки
+
+**Статус: выполнено (17.10.2026).** Реализовано: `PointRepository`
+(list_active/count_active/get_active) + DI; методы `BotService`
+(count_active_points, list_active_points, get_active_point,
+set_visitor_point); `PointStates.choose`; коллбеки `PointSelectCB`,
+`PointListCB`, `ChangePointCB`, `PointCancelCB`; `points_keyboard`
+(имя — адрес, ✅ текущая, пагинация, «✖️ Отмена»); хендлеры
+`handlers/points.py` (селектор, пагинация, выбор, отмена,
+`resolve_point_flow`: 0 точек — без фильтра, 1 — автофиксация,
+>1 + валидный аргумент — фиксация, иначе — селектор); разбор
+`point_<id>` в `cmd_start` (`_parse_point_arg`); кнопка
+«🏳 Сменить филиал» в `categories_keyboard` (при >1 точке);
+`PointMiddleware` — редирект в селектор при `point_id=None`.
+Хранение — `visitors.point_id` (решение B). Тесты: 181 unit +
+162 integration passed.
+
+**Парсинг deep link.** Хендлер `cmd_start` (`handlers/registration.py`)
+принимает `CommandStart()` — аргумент доступен как `message.command_args`
+(aiogram 3). Формат ссылки: `https://t.me/<bot>?start=point_3` → `/start point_3`.
+
+- префикс `point_` + целое id: `point_3` → `point_id=3`;
+- некорректный/не числовой хвост или несуществующая/неактивная точка →
+  аргумент игнорируется (без ошибки), сценарий «аргумент не передан»;
+- `state.clear()` в начале `cmd_start` сохраняется, поэтому выбранная точка
+  восстанавливается ПОСЛЕ разбора аргумента (см. «Сохранение контекста»).
+
+**Сценарии выбора (общая функция `resolve_point(bot_service, arg_point_id)`):**
+
+| Условие | Поведение |
+|---|---|
+| активных точек в БД **0** | точка не требуется, контент без фильтра (обратная совместимость) |
+| активных точек **1** | точка фиксируется автоматически (UPDATE visitors SET point_id=...), селектор не показывается |
+| точек **несколько**, аргумент валиден | точка фиксируется (`UPDATE visitors SET point_id=...`) |
+| точек **несколько**, аргумента нет/невалиден | `UPDATE visitors SET point_id=NULL` + инлайн-клавиатура селектора |
+
+**Селектор точек:** `keyboards.py` — `PointSelectCB(point_id)` и
+`points_keyboard(points)`; кнопка на точку: `name` + перевод строки `address`
+(лимит 64 символа на кнопку — текст усекается `…`), пагинация ◀️ N/M ▶️ по
+`page_size` из настроек; сверху служебная строка «Выберите филиал:».
+Выбор кнопкой → `UPDATE visitors SET point_id=...` → главное меню.
+
+**Смена точки.** Два входа, оба ведут в один хендлер показа селектора:
+
+- кнопка **«🏳 Сменить филиал»** в `main_menu_keyboard()` и
+  `categories_keyboard()` (показывается только при `count_active() > 1`),
+  коллбек `ChangePointCB`;
+- **`/start` без аргумента** — штатный путь сброса: `visitors.point_id = NULL`
+  и показ селектора (привычное пользователю действие «начать заново»).
+  Команда `/points` не вводится.
+
+При смене точки — `dialog_manager.reset_stack()` (иначе в `dialog_data`
+останутся часы/даты, собранные по графику прежнего филиала).
+
+**Порядок в `cmd_start`:** разбор аргумента → `state.clear()` → регистрация
+(если посетитель не зарегистрирован: аргумент сохраняется в
+`state.update_data(pending_point_id=...)` и применяется после согласия) →
+иначе `resolve_point(arg_point_id)` → главное меню.
+
+**Сохранение контекста:** источник истины — колонка `visitors.point_id`
+(FK → points, nullable). `PointMiddleware` (`bot/middlewares.py`) при
+каждом `/start` читает `visitors.point_id` и кладёт в `data["point_id"]`
+для хендлеров. Группа состояний `PointStates` (`choose = State()`) используется
+исключительно как маркер «режим выбора» — пока точка выбрана, FSM-состояния
+чистятся, данные FSM не хранят `point_id`. При `visitors.point_id IS NULL`
+и нескольких точках middleware уводит в селектор.
+
+**Решение по хранению:** вариант B (колонка `visitors.point_id`).
+Точка переживает `/start`, перезапуск Redis и смену устройства. FSM — только
+«режим выбора».
+
+### 3. Фильтрация контента в боте
+
+**Репозитории** (условие «локальное ∪ глобальное» из п. 1 — один хелпер,
+без дублирования):
+
+- `CategoryRepository.point_condition(point_id)` — EXISTS(связь с точкой) OR NOT EXISTS(любая связь);
+- `CategoryRepository.list_active_for_point(point_id, *, limit, offset)` —
+  активные категории для точки (`point_id=None` → прежний `list_active`);
+- `CategoryRepository.count_active_for_point(point_id)` — total для пагинации;
+- `ObjectRepository.point_condition(point_id)` — аналогично для объектов;
+- `ObjectRepository.active_point_conditions(category_id, point_id)` —
+  active_conditions + point_condition;
+- `ObjectRepository.list_by_category(..., point_id: int | None = None)` —
+  только active + фильтр точки (global или привязан);
+- `ObjectRepository.is_visible_for_point(object_id, point_id)` — проверка
+  одного объекта (для защиты от старых кнопок).
+- `PointRepository`: `list_active()`, `get_active(id)`, `count_active()`.
+
+**BotService / хендлеры:**
+
+- `BotService.list_categories(page, point_id)` — использует `count_active_for_point`/`list_active_for_point` при `point_id`;
+- `BotService.list_objects(category_id, page, point_id)` — использует `active_point_conditions`;
+- `BotService.get_object(object_id, point_id)` — проверяет `is_active`/`category.is_active` + `is_visible_for_point`;
+- `BotService.is_object_visible(object_id, point_id)` — публичный хелпер для хендлеров;
+- `send_categories_menu` (`handlers/menu.py`) — берёт `point_id` из visitor, вызывает `list_active_for_point`; пустой результат — прежнее
+  сообщение «Категории пока не добавлены.»;
+- список объектов категории — `list_by_category(..., point_id)`; объект чужой точки
+  недоступен и по прямой кнопке (проверка при открытии страницы объекта:
+  сообщение «Объект недоступен в выбранном филиале. Смените филиал в главном меню.» + возврат
+  к категориям точки);
+- `send_pdf` — дополнительная проверка `is_visible_for_point` (защита от старых кнопок после смены филиала);
+- `create_request` — `get_object(object_id, visitor.point_id)` (объект должен быть видим точке);
+- пагинация — `page_size` из настроек без изменений.
+
+**Статус: выполнено (17.10.2026).** Реализовано: `point_scope.py` (хелпер `point_visible_condition`), `CategoryRepository` (`point_condition`, `list_active_for_point`, `count_active_for_point`), `ObjectRepository` (`point_condition`, `active_point_conditions`, `list_by_category` с `point_id`, `is_visible_for_point`), `BotService` (`list_categories/list_objects/get_object` с `point_id`, `is_object_visible`), хендлеры `menu.py` (передача `visitor.point_id` во все вызовы, проверка видимости в `show_object` и `send_pdf`), `create_request` с проверкой видимости точки. Тесты: 183 unit (2 новых + point_scope) + 4 интеграционных (фильтрация категорий/объектов по точке, исключение неактивных, `is_visible_for_point`).
+
+**Backend API (минимальный контур, без него точки нельзя завести):**
+
+- `GET/POST/PATCH/DELETE /points` (admin) + `GET/PUT /points/{id}/categories`
+  и `GET/PUT /points/{id}/objects` (паттерн diff-замены `sync_managers`);
+- схемы `PointIn/UpdateIn/Out` (PATCH-семантика: `null` — не менять),
+  валидация `timezone` через `zoneinfo.available_timezones()`,
+  `work_interval_begin < work_interval_end`;
+- frontend: страница `/points` (admin) — CRUD + модалки привязки категорий и
+  объектов (по образцу `UiManagersModal`), deep-link ссылки вида
+  `https://t.me/<bot>?start=point_{id}` (копировать);
+- в выдаче `/categories` и `/objects` — отметка «глобальная» (нет записей в
+  таблицах связей), чтобы админ видел фактический охват.
+
+### 4. Графики работы, интервалы и часовые пояса
+
+**Ограничение часов в диалоге заявки** (`bot/dialogs/time_items.py`,
+`dynamic_request_dialog.py`):
+
+- `generate_hours(begin, end)` — вместо `range(24)` только часы `h`, для
+  которых `begin <= time(h, 0) < end` (для `09:00–19:00` → `09…18`);
+  `begin/end=None` → прежние `00…23`;
+- минуты — `generate_minutes(step)` с обрезкой по границам: в первом
+  доступном часа — минуты `>= begin.minute`, в последнем — `< end.minute`
+  (с учётом шага);
+- точки доступа к функции: геттеры `get_hours` / `get_minutes` получают
+  `work_interval_*` выбранной точки (через `start_data["point"]`, который
+  кладёт хендлер кнопки «Создать заявку»);
+- **валидация при финализации** (`validate_request_data`) — повторная
+  проверка времени по графику точки (защита от «протухшего» окна после смены
+  графика) + ошибка «Вне графика работы филиала (09:00–19:00)» с возвратом
+  на шаг выбора времени;
+- дата: `RuCalendar` остаётся с `min_date=сегодня`; «сегодня» считается
+  **по таймзоне точки** (`datetime.now(ZoneInfo(tz)).date()`), иначе в
+  `Asia/Yekaterinburg` вечер «потеряется» относительно `UTC`.
+
+**Таймзона в интерфейсе бота** — новый модуль `app/src/app/bot/timezones.py`:
+
+- `TZ_RU: dict[str, str]` — русские наименования используемых IANA-зон
+  (`Asia/Yekaterinburg → "Азия/Екатеринбург"`, `Europe/Moscow →
+  "Европа/Москва"`, …);
+- `utc_offset_label(tz: str) -> str` — смещение по `zoneinfo`:
+  `ZoneInfo(tz).utcoffset(now)` → `UTC+5` (минутные зоны — `UTC+5:30`);
+- `format_timezone(tz: str) -> str` → `Азия/Екатеринбург, UTC+5`; неизвестная
+  IANA-зона — имя отдаётся как есть + посчитанное смещение (без падения);
+- применение: текст окна выбора даты и окон выбора времени — строка вида
+  `🌍 Часовой пояс филиала: Азия/Екатеринбург, UTC+5` + в карточке
+  предпросмотра (`summary`) и в подтверждении заявки время помечается
+  таймзоной филиала;
+- зависимостей не добавляем: `zoneinfo` (stdlib) + `tzdata` уже доступны
+  в образе; словарь `TZ_RU` — только для отображения, вся логика на IANA-id.
+
+**Решение (A — принято):** время заявки хранится **как ввёл посетитель,
+в местном времени точки** (`request_fields`), привязка к `point.timezone`
+даёт однозначную интерпретацию; менеджеру в `/requests` — время + метка
+таймзоны филиала. Конвертация в UTC при создании (B) отклонена: потребовала
+бы переписывающей миграции времени и усложнила ручной ввод.
+
+**Решение (A — принято):** `begin <= h:00 < end` — для `09:00–19:00`
+доступны часы `09…18`, последний час графика не включается (слот `19:00`
+выходил бы за закрытие).
+
+### 5. Тесты
+
+Unit (`app/tests/unit/`):
+
+- `test_timezones.py` — `format_timezone` (русское имя + `UTC+5`,
+  минутная зона `UTC+5:30`, неизвестная зона без падения);
+- `test_time_items.py` (расширение) — `generate_hours(09:00, 19:00)` → 10
+  элементов `09…18`, `begin=None/end=None` → 24 элемента, обрезка минут по
+  границам и при шаге 15;
+- условие «локальное ∪ глобальное» — чистая функция-билдер условий
+  (`point_filter_condition`), проверяется компиляцией SQL.
+
+Интеграционные (`app/tests/integration/`):
+
+- `test_api_points.py` — CRUD точек (валидация таймзоны и интервала: bad
+  timezone 400, `begin >= end` 400), `PUT /points/{id}/categories|objects`
+  (diff, unknown id 400), права (manager 403);
+- репозитории: категория/объект привязаны к точке A → видны в A, не видны в B;
+  без привязок → видны в обеих; `point_id=None` → всё;
+- каскады: удаление точки → связи, удаление категории/объекта → связи;
+- фикстуры: `point_a`, `point_b`, `category_global`, `object_of_point_a`.
+
+Бот — ручная проверка: `/start point_<id>` (валидный/битый аргумент), одна
+точка в БД, несколько точек (селектор + пагинация), смена филиала, часы
+строго в графике, строка таймзоны в окнах даты/времени.
+
+### 6. Порядок реализации
+
+1. Миграция alembic (`points`, `point_categories`, `point_objects`) →
+   основная и тестовая БД;
+2. Домен: `Point`, `PointCategory`, `PointObject` + связи;
+3. Репозитории: `PointRepository`, фильтры «локальное ∪ глобальное» в
+   `CategoryRepository` / `ObjectRepository`;
+4. Бот: `PointStates`, `PointMiddleware`, разбор deep link в `cmd_start`,
+   `points_keyboard`/`PointSelectCB`, смена филиала;
+5. Фильтрация меню: категории → объекты → страница объекта;
+6. Таймзоны и график: `bot/timezones.py`, `generate_hours(begin, end)`,
+   обрезка минут, «сегодня» по таймзоне точки, валидация в финализации,
+   вывод таймзоны в окнах;
+7. API `/points` (+ привязки) и frontend `/points`;
+8. Тесты (unit + интеграционные), прогон в `ubc-test-runner`, пересборка
+   образов `ubc-app` / `ubc-app-test` / `ubc-frontend`.
+
+---
+
 ## Как использовать этот файл в новой сессии
 
 1. Откройте новый диалог.

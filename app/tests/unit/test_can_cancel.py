@@ -40,6 +40,7 @@ def make_service(interval_minutes: str) -> BotService:
         visitors=None,  # type: ignore[arg-type]
         categories=None,  # type: ignore[arg-type]
         objects=None,  # type: ignore[arg-type]
+        points=None,  # type: ignore[arg-type]
         requests=None,  # type: ignore[arg-type]
         request_fields=None,  # type: ignore[arg-type]
         app_settings=settings,

@@ -1208,9 +1208,9 @@ TS-интерфейсы моделей и name-by-id хелперы, булев�
 > выбранной точке, график работы и часовой пояс точки при выборе даты и времени
 > заявки.
 >
-> **Статус: в процессе.** Пункты 1–2 выполнены (17.10.2026), пункты 3–6 —
-> план. Решения по хранению (visitors.point_id — вариант B), времени заявки
-> (местное время точки — A) и границам часов (begin <= h:00 < end — A) приняты.
+> **Статус: выполнено (18.10.2026).** Пункты 1–5 выполнены. Решения по хранению (visitors.point_id — вариант B), времени заявки
+> (местное время точки — A), границам часов (begin <= h:00 < end — A) и
+> отметке глобальности (is_global в списках + состав из модалки — A) приняты.
 
 ### 1. База данных и миграции (SQLAlchemy)
 
@@ -1390,7 +1390,7 @@ set_visitor_point); `PointStates.choose`; коллбеки `PointSelectCB`,
 - `create_request` — `get_object(object_id, visitor.point_id)` (объект должен быть видим точке);
 - пагинация — `page_size` из настроек без изменений.
 
-**Статус: выполнено (17.10.2026).** Реализовано: `point_scope.py` (хелпер `point_visible_condition`), `CategoryRepository` (`point_condition`, `list_active_for_point`, `count_active_for_point`), `ObjectRepository` (`point_condition`, `active_point_conditions`, `list_by_category` с `point_id`, `is_visible_for_point`), `BotService` (`list_categories/list_objects/get_object` с `point_id`, `is_object_visible`), хендлеры `menu.py` (передача `visitor.point_id` во все вызовы, проверка видимости в `show_object` и `send_pdf`), `create_request` с проверкой видимости точки. Тесты: 183 unit (2 новых + point_scope) + 4 интеграционных (фильтрация категорий/объектов по точке, исключение неактивных, `is_visible_for_point`).
+**Статус (бот): выполнено (17.10.2026).** Реализовано: `point_scope.py` (хелпер `point_visible_condition`), `CategoryRepository` (`point_condition`, `list_active_for_point`, `count_active_for_point`), `ObjectRepository` (`point_condition`, `active_point_conditions`, `list_by_category` с `point_id`, `is_visible_for_point`), `BotService` (`list_categories/list_objects/get_object` с `point_id`, `is_object_visible`), хендлеры `menu.py` (передача `visitor.point_id` во все вызовы, проверка видимости в `show_object` и `send_pdf`), `create_request` с проверкой видимости точки. Тесты: 183 unit (2 новых + point_scope) + 4 интеграционных (фильтрация категорий/объектов по точке, исключение неактивных, `is_visible_for_point`).
 
 **Backend API (минимальный контур, без него точки нельзя завести):**
 
@@ -1405,7 +1405,40 @@ set_visitor_point); `PointStates.choose`; коллбеки `PointSelectCB`,
 - в выдаче `/categories` и `/objects` — отметка «глобальная» (нет записей в
   таблицах связей), чтобы админ видел фактический охват.
 
+**Статус (API + frontend): выполнено (17.10.2026).** Реализовано:
+
+- `app/api/schemas/point.py` — `PointIn/PointUpdateIn/PointOut`,
+  `PointCategoriesIn/Out`, `PointObjectsIn/Out`;
+- `app/api/routers/points.py` — CRUD + `GET/PUT /{id}/categories|objects`
+  (diff-замена `PointRepository.sync_categories/sync_objects`), регистрация в
+  `api/main.py` и `api/routers/__init__.py`;
+- валидация в роутере (**400**, как прочие бизнес-ошибки; pydantic дал бы 422):
+  `timezone` через `zoneinfo.available_timezones()`, `begin < end`
+  (при PATCH — по объединённым значениям: можно менять одну границу);
+- `is_global` в `CategoryOut`/`ObjectOut` — **решение: флаг в списках +
+  отдельный запрос состава из модалки** (вариант с `points: [...]` в списке
+  отклонён: JOIN + размножение строк и вес ответа без пользы для списка).
+  Считается одним `NOT EXISTS` на страницу
+  (`CategoryRepository.global_ids` / `ObjectRepository.global_ids`);
+- `bot.username` в настройках (`KEY_BOT_USERNAME`): deep-link
+  `https://t.me/<username>?start=point_{id}`. Заполняется автоматически при
+  старте бота (`_save_bot_username` → `getMe`), правится на странице
+  «Настройки»; ввод `@bot`/`t.me/bot` нормализуется в username;
+- frontend: `pages/points.vue` (таблица + CRUD-модалка + модалки привязки
+  категорий/объектов с бейджем «🌍 глобальная» + кнопка «Ссылка» с копированием
+  deep-link), пункт меню «Точки продаж» (`layouts/default.vue`, иконка `point`),
+  бейдж «🌍 Все филиалы / 📍 Локальная» в списках `/categories` и `/objects`,
+  поле «Имя бота в Telegram» в `/settings`;
+- типы frontend: `Point`, `PointUpdateIn`, `is_global?` в `Category`/`Obj`;
+- тесты: `tests/integration/test_api_points.py` — 24 теста (CRUD, валидация
+  таймзоны/интервала 400, PATCH-семантика, diff-замена привязок, unknown id 400,
+  права manager 403, каскады удаления точки/категории, `is_global` в списках);
+  фикстуры `point_a`, `point_b`, `category_global`, `object_of_point_a`.
+  Прогон: 183 unit + 190 интеграционных — зелёные.
+
 ### 4. Графики работы, интервалы и часовые пояса
+
+**Статус: выполнено (18.10.2026).** Реализовано: `bot/timezones.py` (TZ_RU, format_timezone, utc_offset_label, today_in), `generate_hours(begin, end)` (график 09:00–19:00 → 09…18), `generate_minutes` с обрезкой по границам (begin.hour — низ, end.hour — верх), `RuCalendar._get_user_config` — `min_date` по `today_in(point.timezone)`, `getters.py` (work_interval, timezone_line, timezone_note, hours_getter, minutes_getter, summary_getter с UTC-offset для TIME), `dynamic_request_dialog.py` (schedule_error, hour_in_schedule, time_in_schedule, find_out_of_schedule, tz_line в окнах DATE/TIME, tz_note в summary и подтверждении), `handlers/requests.py` — `start_request` передаёт `point` в start_data. Тесты: 217 unit (15 timezones + 16 time_items) + 166 интеграционных — зелёные.
 
 **Ограничение часов в диалоге заявки** (`bot/dialogs/time_items.py`,
 `dynamic_request_dialog.py`):
@@ -1462,18 +1495,25 @@ Unit (`app/tests/unit/`):
 - `test_time_items.py` (расширение) — `generate_hours(09:00, 19:00)` → 10
   элементов `09…18`, `begin=None/end=None` → 24 элемента, обрезка минут по
   границам и при шаге 15;
-- условие «локальное ∪ глобальное» — чистая функция-билдер условий
-  (`point_filter_condition`), проверяется компиляцией SQL.
+- условие «локальное ∪ глобальное» — `test_point_scope.py`: билдер
+  `point_visible_condition` проверяется компиляцией SQL (OR EXISTS + NOT EXISTS).
+  **Статус: выполнено (17.10.2026).**
 
 Интеграционные (`app/tests/integration/`):
 
 - `test_api_points.py` — CRUD точек (валидация таймзоны и интервала: bad
-  timezone 400, `begin >= end` 400), `PUT /points/{id}/categories|objects`
-  (diff, unknown id 400), права (manager 403);
-- репозитории: категория/объект привязаны к точке A → видны в A, не видны в B;
-  без привязок → видны в обеих; `point_id=None` → всё;
+  timezone 400, `begin >= end` 400, PATCH по объединённым границам),
+  `PUT /points/{id}/categories|objects` (diff, unknown id 400, пустой список =
+  снять все), права (manager 403), каскады удаления точки/категории,
+  `is_global` в списках `/categories` и `/objects`. **Статус: выполнено
+  (17.10.2026)** — 24 теста;
+- `test_point_scope.py` — репозитории: категория/объект привязаны к точке A →
+  видны в A, не видны в B; без привязок → видны везде; `point_id=None` → всё;
+  неактивные исключаются; `is_visible_for_point`. **Статус: выполнено
+  (17.10.2026)** — 4 теста;
 - каскады: удаление точки → связи, удаление категории/объекта → связи;
-- фикстуры: `point_a`, `point_b`, `category_global`, `object_of_point_a`.
+- фикстуры: `point_a`, `point_b`, `category_global`, `object_of_point_a` —
+  **добавлены (17.10.2026)**.
 
 Бот — ручная проверка: `/start point_<id>` (валидный/битый аргумент), одна
 точка в БД, несколько точек (селектор + пагинация), смена филиала, часы
@@ -1482,19 +1522,32 @@ Unit (`app/tests/unit/`):
 ### 6. Порядок реализации
 
 1. Миграция alembic (`points`, `point_categories`, `point_objects`) →
-   основная и тестовая БД;
-2. Домен: `Point`, `PointCategory`, `PointObject` + связи;
+    основная и тестовая БД — **выполнено (17.10.2026)**;
+2. Домен: `Point`, `PointCategory`, `PointObject` + связи — **выполнено (17.10.2026)**;
 3. Репозитории: `PointRepository`, фильтры «локальное ∪ глобальное» в
-   `CategoryRepository` / `ObjectRepository`;
+    `CategoryRepository` / `ObjectRepository` — **выполнено (17.10.2026)**;
 4. Бот: `PointStates`, `PointMiddleware`, разбор deep link в `cmd_start`,
-   `points_keyboard`/`PointSelectCB`, смена филиала;
-5. Фильтрация меню: категории → объекты → страница объекта;
+    `points_keyboard`/`PointSelectCB`, смена филиала — **выполнено (17.10.2026)**;
+5. Фильтрация меню: категории → объекты → страница объекта — **выполнено (17.10.2026)**;
+6. Таймзоны и график: `bot/timezones.py`, `generate_hours(begin, end)`,
+    обрезка минут, «сегодня» по таймзоне точки, валидация в финализации,
+    вывод таймзоны в окнах — **выполнено (18.10.2026)**;
+7. API `/points` (+ привязки) и frontend `/points` — **выполнено (17.10.2026)**;
+8. Тесты (unit + интеграционные), прогон в `ubc-test-runner`, пересборка
+    образов `ubc-app` / `ubc-app-test` / `ubc-frontend` — **выполнено (18.10.2026)**:
+    217 unit + 166 интеграционных (батчами), контейнеры backend/bot перезапущены.
+   `CategoryRepository` / `ObjectRepository` — **выполнено (17.10.2026)**;
+4. Бот: `PointStates`, `PointMiddleware`, разбор deep link в `cmd_start`,
+   `points_keyboard`/`PointSelectCB`, смена филиала — **выполнено (17.10.2026)**;
+5. Фильтрация меню: категории → объекты → страница объекта — **выполнено (17.10.2026)**;
 6. Таймзоны и график: `bot/timezones.py`, `generate_hours(begin, end)`,
    обрезка минут, «сегодня» по таймзоне точки, валидация в финализации,
-   вывод таймзоны в окнах;
-7. API `/points` (+ привязки) и frontend `/points`;
+   вывод таймзоны в окнах — **план (пункт 4)**;
+7. API `/points` (+ привязки) и frontend `/points` — **выполнено (17.10.2026)**;
 8. Тесты (unit + интеграционные), прогон в `ubc-test-runner`, пересборка
-   образов `ubc-app` / `ubc-app-test` / `ubc-frontend`.
+   образов `ubc-app` / `ubc-app-test` / `ubc-frontend` — частично:
+   unit + интеграционные для пунктов 1–3 и 7 выполнены (183 unit + 190
+   интеграционных); тесты таймзоны/графика — вместе с пунктом 4.
 
 ---
 
@@ -1932,3 +1985,19 @@ Unit (`app/tests/unit/`):
   E2E-дамп и `pg_restore` на реальной postgres (одноразовый стенд).
   В пользовательском `.env` добавить `POSTGRES_BACKUP_AT` /
   `POSTGRES_BACKUP_KEEP` (fail-fast в compose).
+- **Внедрение точек продаж (филиалы)** — выполнено (18.10.2026):
+  - Пункт 1 — миграции `a1b2c3d4e5f1`…`a1b2c3d4e5f4` (points, point_categories,
+    point_objects, visitors.point_id);
+  - Пункт 2 — deep link `/start point_<id>`, селектор, смена филиала,
+    PointMiddleware, PointStates;
+  - Пункт 3 — фильтрация контента (point_visible_condition, list_active_for_point,
+    active_point_conditions, is_visible_for_point), API `/points` (+ CRUD, привязки,
+    is_global), frontend `/points` (CRUD, модалки привязок, deep-link ссылки);
+  - Пункт 4 — `bot/timezones.py` (format_timezone, utc_offset_label, today_in),
+    `generate_hours(begin, end)`, обрезка минут, `RuCalendar` с `min_date` по
+    таймзоне точки, вывод таймзоны в окнах DATE/TIME и в summary, валидация
+    графика при финализации, `start_request` передаёт `point` в start_data;
+  - Пункт 5 — 217 unit + 166 интеграционных passed, `ubc-app` / `ubc-app-test`
+    пересобраны, контейнеры backend/bot перезапущены;
+  - исправлен баг в `middlewares.py`: `__prefixed__()` → `__prefix__` (бот падал
+    при старте из-за несуществующего атрибута CallbackData).

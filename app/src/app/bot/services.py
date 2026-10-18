@@ -158,6 +158,26 @@ class BotService:
         await self.session.flush()
         await self.session.commit()
 
+    async def get_visitor_point(self, telegram_id: int) -> Point | None:
+        """Точка посетителя (для таймзоны и графика работы в диалоге заявки)."""
+        visitor = await self.get_visitor(telegram_id)
+        if visitor is None or visitor.point_id is None:
+            return None
+        return await self.points.get(visitor.point_id)
+
+    @staticmethod
+    def point_data(point: Point | None) -> dict:
+        """Данные точки для start_data диалога (JSON-совместимые строки)."""
+        if point is None:
+            return {}
+        return {
+            "id": point.id,
+            "name": point.name,
+            "timezone": point.timezone,
+            "work_interval_begin": point.work_interval_begin.isoformat(),
+            "work_interval_end": point.work_interval_end.isoformat(),
+        }
+
     # -- меню ---------------------------------------------------------------
 
     async def list_categories(

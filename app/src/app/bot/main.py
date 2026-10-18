@@ -31,8 +31,26 @@ from app.bot.notifications import register_notification_consumers
 from app.config.settings import Settings
 from app.di import build_container
 from app.log import get_logger, setup_logging
+from app.services.app_settings import KEY_BOT_USERNAME, AppSettingsService
 
 logger = get_logger(__name__)
+
+
+async def _save_bot_username(container, bot: Bot) -> None:
+    """Сохранить username бота в настройках (для deep-link «выбрать филиал»).
+
+    Админ не должен вручную вводить username: он известен боту (getMe).
+    Ошибка не критична — бот стартует, настройка остаётся прежней.
+    """
+    try:
+        me = await bot.get_me()
+        if not me.username:
+            return
+        async with container() as scope:
+            app_settings = await scope.get(AppSettingsService)
+            await app_settings.set(KEY_BOT_USERNAME, me.username)
+    except Exception:
+        logger.warning("bot_username_save_failed")
 
 
 async def _run_webhook(settings: Settings, bot: Bot, dp: Dispatcher) -> None:
@@ -86,6 +104,7 @@ async def run() -> None:
         await bot.set_my_commands(
             [BotCommand(command="start", description="Главное меню")]
         )
+        await _save_bot_username(container, bot)
 
         dp = Dispatcher(
             storage=RedisStorage.from_url(

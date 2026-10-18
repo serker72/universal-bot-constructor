@@ -3,7 +3,7 @@
 from aiogram import F, Router
 from aiogram import html
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from aiogram_dialog import DialogManager
@@ -24,6 +24,7 @@ router = Router(name="registration")
 @router.message(CommandStart())
 async def cmd_start(
     message: Message,
+    command: CommandObject,
     state: FSMContext,
     dialog_manager: DialogManager,
     bot_service: FromDishka[BotService],
@@ -35,7 +36,7 @@ async def cmd_start(
     await dialog_manager.reset_stack()
     visitor = await bot_service.get_visitor(message.from_user.id)  # type: ignore[union-attr]
     # парсинг deep link: /start point_3 → arg_point_id=3
-    arg_point_id = _parse_point_arg(message.command_args)
+    arg_point_id = _parse_point_arg(command.args if command else None)
     if visitor is None:
         # незарегистрирован — выбираем ФИО, потом точку
         await state.set_state(RegistrationStates.full_name)

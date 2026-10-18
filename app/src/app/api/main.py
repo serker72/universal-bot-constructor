@@ -19,6 +19,7 @@ from app.api.routers import (
     devices_router,
     objects_router,
     pdf_router,
+    points_router,
     request_fields_router,
     requests_router,
     sessions_router,
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix=settings.backend.api_prefix)
     app.include_router(categories_router, prefix=settings.backend.api_prefix)
     app.include_router(objects_router, prefix=settings.backend.api_prefix)
+    app.include_router(points_router, prefix=settings.backend.api_prefix)
     app.include_router(pdf_router, prefix=settings.backend.api_prefix)
     app.include_router(users_router, prefix=settings.backend.api_prefix)
     app.include_router(visitors_router, prefix=settings.backend.api_prefix)

@@ -30,6 +30,7 @@ from app.domain import Base
 from app.domain.models import (
     Category,
     Object,
+    Point,
     Request,
     RequestAvailableField,
     RequestCategoryField,
@@ -39,6 +40,7 @@ from app.domain.models import (
     UserRole,
     Visitor,
 )
+from app.domain.models.point_object import PointObject
 from app.services.password import hash_password
 
 API = "/api/v1"
@@ -233,6 +235,72 @@ async def obj(db: AsyncSession, category: Category) -> Object:
     """Объект в БД (привязан к category)."""
     o = Object(category_id=category.id, **OBJECT_DATA)
     db.add(o)
+    await db.commit()
+    return o
+
+
+# --- точки продаж (филиалы) --------------------------------------------------
+
+POINT_A_DATA = {
+    "name": "Point A",
+    "address": "ул. Ленина, 1",
+    "timezone": "Europe/Moscow",
+}
+POINT_B_DATA = {
+    "name": "Point B",
+    "address": "ул. Мира, 2",
+    "timezone": "Asia/Yekaterinburg",
+}
+
+
+@pytest.fixture
+def point_data() -> dict:
+    """Данные для создания точки через API."""
+    return dict(POINT_A_DATA)
+
+
+@pytest.fixture
+async def point_a(db: AsyncSession) -> Point:
+    """Точка A (Москва)."""
+    point = Point(**POINT_A_DATA)
+    db.add(point)
+    await db.commit()
+    return point
+
+
+@pytest.fixture
+async def point_b(db: AsyncSession) -> Point:
+    """Точка B (Екатеринбург)."""
+    point = Point(**POINT_B_DATA)
+    db.add(point)
+    await db.commit()
+    return point
+
+
+@pytest.fixture
+async def category_global(db: AsyncSession) -> Category:
+    """Категория без привязки к точкам (видна всем — «глобальная»)."""
+    cat = Category(name="Global category", sort_order=1, is_active=True)
+    db.add(cat)
+    await db.commit()
+    return cat
+
+
+@pytest.fixture
+async def object_of_point_a(
+    db: AsyncSession, category_global: Category, point_a: Point
+) -> Object:
+    """Объект глобальной категории, привязанный только к точке A."""
+    o = Object(
+        category_id=category_global.id,
+        name="Object of A",
+        short_description="Только для точки A",
+        sort_order=1,
+        is_active=True,
+    )
+    db.add(o)
+    await db.flush()
+    db.add(PointObject(point_id=point_a.id, object_id=o.id))
     await db.commit()
     return o
 

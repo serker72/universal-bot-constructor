@@ -5,6 +5,7 @@ from app.api.routers.categories import router as categories_router
 from app.api.routers.devices import router as devices_router
 from app.api.routers.objects import router as objects_router
 from app.api.routers.pdf import router as pdf_router
+from app.api.routers.points import router as points_router
 from app.api.routers.request_fields import router as request_fields_router
 from app.api.routers.requests import router as requests_router
 from app.api.routers.sessions import router as sessions_router
@@ -18,6 +19,7 @@ __all__ = [
     "devices_router",
     "objects_router",
     "pdf_router",
+    "points_router",
     "request_fields_router",
     "requests_router",
     "sessions_router",

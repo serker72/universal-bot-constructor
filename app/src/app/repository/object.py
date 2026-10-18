@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 
-from sqlalchemy import asc, select
+from sqlalchemy import asc, exists, select
 from sqlalchemy.orm import selectinload
 
 from app.domain.models import Category, CategoryManager, Object, ObjectManager
@@ -89,6 +89,18 @@ class ObjectRepository(BaseRepository[Object], ManagerLinkMixin):
             self.point_condition(point_id),
         )
         return count > 0
+
+    async def global_ids(self, ids: Sequence[int]) -> set[int]:
+        """Подмножество id без привязки к точкам (глобальные, для is_global)."""
+        if not ids:
+            return set()
+        rows = await self.session.scalars(
+            select(Object.id).where(
+                Object.id.in_(ids),
+                ~exists(select(1).where(PointObject.object_id == Object.id)),
+            )
+        )
+        return set(rows)
 
     async def list_access_manager_ids(self, object_id: int) -> list[int]:
         """Id менеджеров с доступом к объекту: прямые связи ∪ менеджеры

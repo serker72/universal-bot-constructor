@@ -58,12 +58,14 @@ async def list_objects(
         order_by=asc(Object.sort_order),
     )
     total = await repo.count(*conditions)
-    return Page(
-        items=[_to_out(o) for o in items],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
+    # is_global: нет привязки к точкам (один EXISTS-запрос на страницу)
+    global_ids = await repo.global_ids([o.id for o in items])
+    outs = []
+    for o in items:
+        out = _to_out(o)
+        out.is_global = o.id in global_ids
+        outs.append(out)
+    return Page(items=outs, total=total, limit=limit, offset=offset)
 
 
 @router.post("", response_model=ObjectOut, status_code=status.HTTP_201_CREATED)

@@ -7,14 +7,19 @@
 Геттеры динамического диалога заявки работают с контекстом:
 - start_data["schema"] — список полей категории (dict);
 - start_data["answers"] — {field_id: value_str};
+- start_data["point"] — данные точки продаж (timezone, график работы);
 - dialog_data["current_step"] — индекс текущего поля в schema;
 - dialog_data["temp_hour"] — выбранный час между окнами TIME.
 """
+
+from datetime import time
 
 from aiogram_dialog import DialogManager
 
 from app.bot.dialogs.time_items import MINUTES_STEP, generate_hours, generate_minutes
 from app.bot.services import BotService
+from app.bot.timezones import format_timezone, utc_offset_label
+from app.domain.models import RequestFieldType
 
 
 async def get_bot_service(manager: DialogManager) -> BotService:
@@ -35,8 +40,54 @@ async def profile_getter(dialog_manager: DialogManager, **kwargs) -> dict:
             "Отправьте новый номер или выберите его ниже."
         )
     else:
-        phone_text = "Отправьте ваш номер телефона (например, +79001234567):"
+        phone_text = "Отправьте ваш номер телефона (например +79001234567):"
     return {"profile_phone": profile_phone, "phone_text": phone_text}
+
+
+# -- точка продаж (таймзона и график работы) ---------------------------------
+
+
+def point_of(manager: DialogManager) -> dict:
+    """Данные точки продаж из start_data (пусто — фильтрации нет)."""
+    return manager.start_data.get("point") or {}
+
+
+def _interval(value: object) -> time | None:
+    """Время из start_data («09:00:00» после JSON-сериализации)."""
+    if isinstance(value, time):
+        return value
+    if not value:
+        return None
+    try:
+        return time.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def work_interval(manager: DialogManager) -> tuple[time | None, time | None]:
+    """График работы точки: (begin, end); нет точки/графика — (None, None)."""
+    point = point_of(manager)
+    begin = _interval(point.get("work_interval_begin"))
+    end = _interval(point.get("work_interval_end"))
+    if begin is None or end is None or begin >= end:
+        return None, None
+    return begin, end
+
+
+def timezone_line(manager: DialogManager) -> str:
+    """Строка таймзоны филиала для окна (пусто — точки нет)."""
+    point = point_of(manager)
+    if not point:
+        return ""
+    return f"🌍 Часовой пояс филиала: {format_timezone(point.get('timezone'))}\n"
+
+
+def timezone_note(manager: DialogManager) -> str:
+    """Метка таймзоны для сводки/подтверждения (пусто — точки нет)."""
+    point = point_of(manager)
+    if not point:
+        return ""
+    return f"🌍 Время указано по часовому поясу филиала: {format_timezone(point.get('timezone'))}"
 
 
 # -- контекст динамического конструктора заявки (общий для диалога) ---------
@@ -82,29 +133,52 @@ def field_minute_step(field: dict | None) -> int:
 
 
 async def field_getter(dialog_manager: DialogManager, **kwargs) -> dict:
-    """Данные текущего поля: подпись, признак необязательности, подсказка."""
+    """Данные текущего поля: подпись, признак необязательности, подсказка.
+
+    Для полей DATE/TIME добавляется строка таймзоны филиала (у остальных
+    типов она пустая — в окнах она не выводится).
+    """
     field = current_field(dialog_manager)
     if field is None:
-        return {"field_label": "", "not_required": True, "skip_hint": ""}
+        return {
+            "field_label": "",
+            "not_required": True,
+            "skip_hint": "",
+            "tz_line": "",
+        }
     required = bool(field["is_required"])
     label = field["label"] + (" (обязательно)" if required else "")
+    tz_line = ""
+    if field["type"] in (RequestFieldType.DATE.value, RequestFieldType.TIME.value):
+        tz_line = timezone_line(dialog_manager)
     return {
         "field_label": label,
         "not_required": not required,
         # подсказка про «-» только для необязательных полей
         "skip_hint": "" if required else " (или «-» чтобы пропустить)",
+        "tz_line": tz_line,
     }
 
 
 async def hours_getter(dialog_manager: DialogManager, **kwargs) -> dict:
-    """Часы 00–23 для окна выбора часа."""
-    return {"hours": generate_hours()}
+    """Часы графика работы точки (без точки — 00–23)."""
+    begin, end = work_interval(dialog_manager)
+    return {"hours": generate_hours(begin, end)}
 
 
 async def minutes_getter(dialog_manager: DialogManager, **kwargs) -> dict:
-    """Минуты с шагом из meta_data текущего TIME-поля."""
+    """Минуты с шагом из meta_data и обрезкой по границам графика."""
     step = field_minute_step(current_field(dialog_manager))
-    return {"minutes": generate_minutes(step)}
+    begin, end = work_interval(dialog_manager)
+    hour = dialog_manager.dialog_data.get("temp_hour")
+    return {
+        "minutes": generate_minutes(
+            step,
+            hour=hour if isinstance(hour, int) else None,
+            begin=begin,
+            end=end,
+        )
+    }
 
 
 async def select_options_getter(dialog_manager: DialogManager, **kwargs) -> dict:
@@ -118,17 +192,30 @@ async def select_options_getter(dialog_manager: DialogManager, **kwargs) -> dict
 
 
 async def summary_getter(dialog_manager: DialogManager, **kwargs) -> dict:
-    """Сводка: список «label: value» по всем полям схемы + телефон."""
+    """Сводка: список «label: value» по всем полям схемы + телефон.
+
+    Значения TIME-полей помечаются смещением таймзоны филиала
+    (время хранится как введено — в местном времени точки).
+    """
     schema = schema_of(dialog_manager)
     answers: dict[int, str | None] = manager_start_answers(dialog_manager)
+    point = point_of(dialog_manager)
+    offset = ""
+    if point:
+        offset = utc_offset_label(point.get("timezone"))
     lines = []
     for f in schema:
         value = answers.get(f["id"])
+        if value and offset and f["type"] == RequestFieldType.TIME.value:
+            value = f"{value} ({offset})"
         lines.append(f"• {f['label']}: {value if value else '—'}")
     phone = dialog_manager.dialog_data.get("phone", "")
+    # хвостовые переводы строки — чтобы без точки в окне не было пустого блока
+    note = timezone_note(dialog_manager)
     return {
         "summary_lines": "\n".join(lines) if lines else "Дополнительные поля не заданы.",
         "phone": phone,
+        "tz_note": f"{note}\n\n" if note else "",
     }
 
 

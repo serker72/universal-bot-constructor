@@ -50,12 +50,14 @@ async def list_categories(
         order_by=asc(Category.sort_order),
     )
     total = await repo.count(*conditions)
-    return Page(
-        items=[CategoryOut.model_validate(c) for c in items],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
+    # is_global: нет привязки к точкам (один EXISTS-запрос на страницу)
+    global_ids = await repo.global_ids([c.id for c in items])
+    outs = []
+    for c in items:
+        out = CategoryOut.model_validate(c)
+        out.is_global = c.id in global_ids
+        outs.append(out)
+    return Page(items=outs, total=total, limit=limit, offset=offset)
 
 
 @router.post("", response_model=CategoryOut, status_code=status.HTTP_201_CREATED)

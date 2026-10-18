@@ -41,6 +41,8 @@ async def start_request(
     except BotServiceError as exc:
         await callback.answer(str(exc), show_alert=True)
         return
+    # данные точки продаж (таймзона + график) — для ограничения часов/минут
+    point = await bot_service.get_visitor_point(callback.from_user.id)
     # RESET_STACK: закрыть возможный незавершённый диалог (состояние
     # хранится в Redis и переживает рестарты), иначе он останется в стеке
     # и отрисуется после done() нового диалога.
@@ -51,6 +53,7 @@ async def start_request(
             "object_id": callback_data.object_id,
             "schema": schema,
             "answers": {},
+            "point": bot_service.point_data(point),
         },
     )
     # снять индикатор загрузки с кнопки

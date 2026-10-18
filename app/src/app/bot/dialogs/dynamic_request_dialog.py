@@ -6,8 +6,13 @@
 Контекст:
 - start_data["schema"]  — список полей (id, code, type, label, is_required, meta_data);
 - start_data["answers"] — {field_id: value_str};
+- start_data["point"]   — точка продаж (timezone, график работы);
 - dialog_data["current_step"] — индекс текущего поля в schema;
 - dialog_data["temp_hour"] — выбранный час между окнами TIME.
+
+График работы точки ограничивает часы/минуты в окнах TIME и проверяется
+повторно при финализации (защита от «протухшего» окна: график могли
+изменить, пока посетитель заполнял заявку).
 
 Роутинг (Routing Engine):
 - process_and_go_next(value) — записать ответ, шаг +1, переключение по
@@ -22,7 +27,7 @@
 ограничения виджетов (min/max_date, список опций) действуют только при отрисовке.
 """
 
-from datetime import date
+from datetime import date, time
 
 from aiogram import html
 from aiogram.types import CallbackQuery, Message
@@ -52,11 +57,17 @@ from app.bot.dialogs.getters import (
     schema_of,
     select_options_getter,
     summary_getter,
+    timezone_note,
+    work_interval,
 )
 from app.bot.services import BotService, BotServiceError
 from app.bot.states import DynamicRequestSG
 from app.bot.validators import normalize_phone
-from app.bot.widgets.ru_calendar import RuCalendar, date_bounds
+from app.bot.widgets.ru_calendar import (
+    RuCalendar,
+    date_bounds,
+    point_timezone,
+)
 from app.domain.models import RequestFieldType
 from app.domain.models.request_field_value import VALUE_TEXT_MAX_LENGTH
 
@@ -109,6 +120,64 @@ def _meta(field: dict | None) -> dict:
 
 def _field_is_type(field: dict | None, field_type: RequestFieldType) -> bool:
     return field is not None and field["type"] == field_type.value
+
+
+# ---------------------------------------------------------------------------
+# График работы точки (ограничения окон времени)
+# ---------------------------------------------------------------------------
+
+
+def schedule_label(begin: time, end: time) -> str:
+    """График работы для сообщения: «09:00–19:00»."""
+    return f"{begin:%H:%M}–{end:%H:%M}"
+
+
+def schedule_error(manager: DialogManager) -> str:
+    """Текст ошибки «вне графика» (пусто — график не задан)."""
+    begin, end = work_interval(manager)
+    if begin is None or end is None:
+        return ""
+    return f"Вне графика работы филиала ({schedule_label(begin, end)})"
+
+
+def hour_in_schedule(manager: DialogManager, hour: int) -> bool:
+    """Попадает ли час в график (begin <= h:00 < end); без графика — да."""
+    begin, end = work_interval(manager)
+    if begin is None or end is None:
+        return True
+    return begin <= time(hour, 0) < end
+
+
+def time_in_schedule(manager: DialogManager, hour: int, minute: int) -> bool:
+    """Попадает ли слот в график; без графика — да."""
+    begin, end = work_interval(manager)
+    if begin is None or end is None:
+        return True
+    return begin <= time(hour, minute) < end
+
+
+def find_out_of_schedule(manager: DialogManager) -> tuple[int, str] | None:
+    """Первое TIME-поле схемы вне графика: (индекс шага, текст ошибки).
+
+    Проверка при финализации: список часов/минут мог быть отрисован до
+    смены графика, поэтому значение проверяется повторно.
+    """
+    begin, end = work_interval(manager)
+    if begin is None or end is None:
+        return None
+    for index, field in enumerate(schema_of(manager)):
+        if field["type"] != RequestFieldType.TIME.value:
+            continue
+        value = _get_answer(manager, field["id"])
+        if not value:
+            continue
+        try:
+            parsed = time.fromisoformat(str(value))
+        except ValueError:
+            return index, f"Некорректное время: {value}"
+        if not begin <= parsed < end:
+            return index, schedule_error(manager)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +409,7 @@ async def on_date_selected(
     """Выбор даты в календаре → ISO-строка в answers (с проверкой границ)."""
     if not _field_is_type(current_field(manager), RequestFieldType.DATE):
         return
-    min_date, max_date = date_bounds()
+    min_date, max_date = date_bounds(tz_name=point_timezone(manager))
     if not min_date <= selected_date <= max_date:
         answer = getattr(event, "answer", None)
         if answer is not None:
@@ -363,6 +432,10 @@ async def on_hour_selected(
     ):
         await callback.answer("Недопустимое значение", show_alert=True)
         return
+    # час мог быть передан из устаревшей клавиатуры (график изменили)
+    if not hour_in_schedule(manager, hour):
+        await callback.answer(schedule_error(manager), show_alert=True)
+        return
     manager.dialog_data["temp_hour"] = hour
     await manager.switch_to(DynamicRequestSG.input_time_minute)
 
@@ -382,6 +455,9 @@ async def on_minute_selected(
         or minute % step != 0
     ):
         await callback.answer("Недопустимое значение", show_alert=True)
+        return
+    if not time_in_schedule(manager, hour, minute):
+        await callback.answer(schedule_error(manager), show_alert=True)
         return
     await process_and_go_next(manager, f"{hour:02d}:{minute:02d}")
 
@@ -419,7 +495,7 @@ async def on_option_selected(
 async def on_submit(
     callback: CallbackQuery, button: Button, manager: DialogManager,
 ) -> None:
-    """Кнопка «Отправить»: валидация обязательных полей → создание заявки."""
+    """Кнопка «Отправить»: валидация полей → создание заявки."""
     schema = schema_of(manager)
     missing = [
         f for f in schema
@@ -429,6 +505,14 @@ async def on_submit(
         labels = ", ".join(f['label'] for f in missing)
         await callback.answer(f"Не заполнено: {labels}", show_alert=True)
         return
+    # график точки мог измениться, пока заполнялась заявка — проверяем снова
+    invalid = find_out_of_schedule(manager)
+    if invalid is not None:
+        index, message = invalid
+        manager.dialog_data["current_step"] = index
+        await callback.answer(message, show_alert=True)
+        await manager.switch_to(DynamicRequestSG.input_time_hour)
+        return
     try:
         req = await finalize_and_create(manager)
     except (BotServiceError, KeyError) as exc:
@@ -436,9 +520,11 @@ async def on_submit(
         await manager.done()
         return
     await manager.done()
-    await callback.message.answer(  # type: ignore[union-attr]
-        f"✅ Заявка #{req.id} создана. Менеджер свяжется с вами."
-    )
+    confirmation = f"✅ Заявка #{req.id} создана. Менеджер свяжется с вами."
+    note = timezone_note(manager)
+    if note:
+        confirmation += f"\n\n{note}"
+    await callback.message.answer(confirmation)  # type: ignore[union-attr]
     await callback.answer()
 
 
@@ -570,7 +656,7 @@ dialog = Dialog(
     ),
     # -- Окно DATE-поля --------------------------------------------------------
     Window(
-        Format("{field_label}\nВыберите дату:"),
+        Format("{field_label}\n{tz_line}Выберите дату:"),
         _CALENDAR_WIDGET,
         _SKIP_INPUT,
         _SKIP_BUTTON,
@@ -581,7 +667,7 @@ dialog = Dialog(
     ),
     # -- Окно TIME: часы --------------------------------------------------------
     Window(
-        Format("{field_label}\nВыберите час:"),
+        Format("{field_label}\n{tz_line}Выберите час:"),
         _HOURS_ROW,
         _SKIP_INPUT,
         _SKIP_BUTTON,
@@ -593,7 +679,7 @@ dialog = Dialog(
     ),
     # -- Окно TIME: минуты -------------------------------------------------------
     Window(
-        Format("{field_label}\nВыберите минуты:"),
+        Format("{field_label}\n{tz_line}Выберите минуты:"),
         _MINUTES_ROW,
         _SKIP_INPUT,
         _SKIP_BUTTON,
@@ -621,7 +707,7 @@ dialog = Dialog(
     Window(
         Format(
             "Проверьте заявку:\n\n"
-            "📱 Телефон: {phone}\n\n{summary_lines}\n\n"
+            "📱 Телефон: {phone}\n\n{summary_lines}\n\n{tz_note}"
             "Отправить заявку?"
         ),
         Button(Const("✅ Отправить"), id="btn_submit", on_click=on_submit),

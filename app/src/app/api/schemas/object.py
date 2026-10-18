@@ -42,6 +42,7 @@ class ObjectOut(BaseModel):
     short_description: str
     sort_order: int
     is_active: bool
+    is_global: bool = False  # нет привязки к точкам
     has_pdf: bool = False  # вычисляется из pdf_path
     created_at: datetime
     updated_at: datetime

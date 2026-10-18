@@ -36,6 +36,7 @@ class CategoryOut(BaseModel):
     button_text: str | None
     sort_order: int
     is_active: bool
+    is_global: bool = False  # нет привязки к точкам
     created_at: datetime
     updated_at: datetime
 

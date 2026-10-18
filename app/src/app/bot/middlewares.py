@@ -111,7 +111,7 @@ class PointMiddleware(BaseMiddleware):
 
     # префиксы callback'ов, которые не нужно перехватывать
     _PT_PREFIXES = tuple(
-        cb.__prefixed__().prefix + ":"
+        cb.__prefix__ + ":"
         for cb in (ChangePointCB, PointSelectCB, PointListCB, PointCancelCB)
     )
 

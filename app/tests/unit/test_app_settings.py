@@ -7,6 +7,7 @@ from app.services.app_settings import (
     DEFAULT_CONSENT_TEXT,
     DEFAULT_PAGE_SIZE,
     DEFAULT_WELCOME_TEXT,
+    KEY_BOT_USERNAME,
     KEY_CANCEL_INTERVAL_MINUTES,
     KEY_CONSENT_TEXT,
     KEY_PAGE_SIZE,
@@ -134,3 +135,41 @@ def test_validate_setting_normalizes_numbers():
     assert validate_setting(KEY_PAGE_SIZE, " 7 ") == "7"
     assert validate_setting(KEY_CANCEL_INTERVAL_MINUTES, "0") == "0"
     assert validate_setting(KEY_WELCOME_TEXT, "") == ""
+
+
+# -- username бота (deep-link «выбрать филиал») -------------------------------
+
+
+async def test_bot_username_empty_by_default(service: AppSettingsService):
+    assert await service.get_bot_username() == ""
+
+
+async def test_bot_username_from_repo(service: AppSettingsService, repo):
+    repo.values = {KEY_BOT_USERNAME: "my_menu_bot"}
+    assert await service.get_bot_username() == "my_menu_bot"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("my_bot", "my_bot"),
+        ("@my_bot", "my_bot"),                       # «@» отбрасывается
+        ("https://t.me/my_bot", "my_bot"),           # ссылка → username
+        ("  my_bot  ", "my_bot"),                    # пробелы обрезаются
+        ("", ""),                                    # пусто — сброс допустим
+    ],
+)
+def test_validate_bot_username_normalizes(raw, expected):
+    from app.services.app_settings import validate_setting
+
+    assert validate_setting(KEY_BOT_USERNAME, raw) == expected
+
+
+def test_validate_bot_username_too_long_rejected():
+    from app.services.app_settings import (
+        MAX_BOT_USERNAME_LENGTH,
+        validate_setting,
+    )
+
+    with pytest.raises(ValueError):
+        validate_setting(KEY_BOT_USERNAME, "x" * (MAX_BOT_USERNAME_LENGTH + 1))

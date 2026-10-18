@@ -18,6 +18,9 @@ KEY_PAGE_SIZE = "bot.page_size"
 KEY_CANCEL_INTERVAL_MINUTES = "requests.cancel_interval_minutes"
 KEY_CONSENT_TEXT = "bot.consent_text"
 KEY_WELCOME_TEXT = "bot.welcome_text"
+# username бота (без @): нужен для deep-link https://t.me/<username>?start=point_N.
+# Заполняется автоматически при старте бота (getMe), правится вручную в настройках.
+KEY_BOT_USERNAME = "bot.username"
 
 DEFAULT_PAGE_SIZE = 10
 DEFAULT_CANCEL_INTERVAL_MINUTES = 24 * 60
@@ -33,6 +36,8 @@ MAX_PAGE_SIZE = 50
 MAX_CANCEL_INTERVAL_MINUTES = 365 * 24 * 60
 # Лимит Telegram на текст сообщения — 4096 символов (с запасом под разметку)
 MAX_TEXT_LENGTH = 3500
+# Лимит username бота в Telegram
+MAX_BOT_USERNAME_LENGTH = 32
 
 CACHE_TTL_SECONDS = 30
 
@@ -91,6 +96,10 @@ class AppSettingsService:
         value = await self._get(KEY_WELCOME_TEXT)
         return DEFAULT_WELCOME_TEXT if value is None else value
 
+    async def get_bot_username(self) -> str:
+        """username бота без @ (пусто — deep-link собрать нельзя)."""
+        return await self._get(KEY_BOT_USERNAME) or ""
+
     async def set(self, key: str, value: str) -> None:
         """Сохранить значение настройки."""
         await self.repo.upsert(key, value)
@@ -113,6 +122,14 @@ def validate_setting(key: str, value: str) -> str:
         if len(value) > MAX_TEXT_LENGTH:
             raise ValueError(f"{key}: не длиннее {MAX_TEXT_LENGTH} символов")
         return value
+    if key == KEY_BOT_USERNAME:
+        # ввод «@bot» и «t.me/bot» приводим к username; пусто — допустимо (сброс)
+        username = value.strip().removeprefix("@").removeprefix("https://t.me/")
+        if len(username) > MAX_BOT_USERNAME_LENGTH:
+            raise ValueError(
+                f"{key}: не длиннее {MAX_BOT_USERNAME_LENGTH} символов"
+            )
+        return username
     return value
 
 

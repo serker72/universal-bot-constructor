@@ -323,7 +323,10 @@ async def test_calendar_bounds_computed_per_render():
     from app.bot.dialogs.dynamic_request_dialog import _CALENDAR_WIDGET
     from app.bot.widgets.ru_calendar import date_bounds
 
-    config = await _CALENDAR_WIDGET._get_user_config({}, None)
+    class _MgrStub:
+        start_data: dict = {}
+
+    config = await _CALENDAR_WIDGET._get_user_config({}, _MgrStub())
     assert (config.min_date, config.max_date) == date_bounds()
 
 

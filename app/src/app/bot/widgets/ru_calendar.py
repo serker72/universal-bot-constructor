@@ -11,11 +11,12 @@ _init_views и передаёт собственные Text-виджеты с р
 
 Неделя начинается с понедельника (firstweekday=0, см. CalendarConfig).
 
-Границы дат (сегодня по Москве … +2 года) вычисляются на каждый рендер
-в _get_user_config (а не один раз при импорте модуля).
+Границы дат (сегодня по таймзоне точки … +2 года) вычисляются на каждый
+рендер в _get_user_config (а не один раз при импорте модуля): таймзона
+берётся из `start_data["point"]` (диалог заявки), без точки — Москва.
 """
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date
 
 from aiogram_dialog import DialogManager
 from aiogram_dialog.api.internal import TextWidget
@@ -29,6 +30,8 @@ from aiogram_dialog.widgets.kbd.calendar_kbd import (
 )
 from aiogram_dialog.widgets.text import Const, Format, Text
 
+from app.bot.timezones import DEFAULT_TZ, today_in, zone_of
+
 RU_MONTHS = (
     "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
     "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
@@ -37,16 +40,13 @@ RU_MONTHS = (
 # week_day в заголовке дней: 1 = понедельник … 7 = воскресенье
 RU_WEEKDAYS = {1: "Пн", 2: "Вт", 3: "Ср", 4: "Чт", 5: "Пт", 6: "Сб", 7: "Вс"}
 
-# Часовой пояс «сегодня» (контейнер работает в UTC): Europe/Moscow —
-# UTC+3 без перехода на летнее время (фиксированное смещение не требует tzdata)
-MOSCOW_TZ = timezone(timedelta(hours=3), "MSK")
 # Горизонт выбора даты
 MAX_YEARS_AHEAD = 2
 
 
 def today_moscow() -> date:
-    """Сегодняшняя дата по Москве."""
-    return datetime.now(MOSCOW_TZ).date()
+    """Сегодняшняя дата по Москве (зона по умолчанию)."""
+    return today_in(DEFAULT_TZ)
 
 
 def add_years(value: date, years: int) -> date:
@@ -57,10 +57,18 @@ def add_years(value: date, years: int) -> date:
         return value.replace(year=value.year + years, day=28)
 
 
-def date_bounds(today: date | None = None) -> tuple[date, date]:
-    """Допустимый диапазон дат: от сегодня (МСК) до +MAX_YEARS_AHEAD лет."""
-    today = today or today_moscow()
+def date_bounds(
+    today: date | None = None, tz_name: str | None = None
+) -> tuple[date, date]:
+    """Допустимый диапазон дат: от сегодня (по таймзоне точки) до +MAX_YEARS_AHEAD."""
+    today = today or today_in(tz_name)
     return today, add_years(today, MAX_YEARS_AHEAD)
+
+
+def point_timezone(manager: DialogManager) -> str:
+    """Таймзона точки из start_data диалога (пусто — зона по умолчанию)."""
+    point = (manager.start_data or {}).get("point") or {}
+    return str(point.get("timezone") or DEFAULT_TZ)
 
 
 
@@ -92,15 +100,17 @@ class RuCalendar(Calendar):
 
     Границы min/max_date и часовой пояс вычисляются на каждый рендер:
     фиксированный при импорте CalendarConfig на следующий день разрешал
-    выбирать прошедшую дату.
+    выбирать прошедшую дату. Таймзона — точки продаж из
+    `start_data["point"]` (без точки — Москва).
     """
 
     async def _get_user_config(
         self, data: dict, manager: DialogManager
     ) -> CalendarUserConfig:
-        min_date, max_date = date_bounds()
+        tz_name = point_timezone(manager)
+        min_date, max_date = date_bounds(tz_name=tz_name)
         return CalendarUserConfig(
-            timezone=MOSCOW_TZ, min_date=min_date, max_date=max_date
+            timezone=zone_of(tz_name), min_date=min_date, max_date=max_date
         )
 
     def _init_views(self) -> dict[CalendarScope, CalendarScopeView]:

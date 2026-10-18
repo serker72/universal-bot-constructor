@@ -36,6 +36,7 @@ export interface Category {
   button_text: string | null
   sort_order: number
   is_active: boolean
+  is_global?: boolean
 }
 
 export interface Obj {
@@ -45,7 +46,29 @@ export interface Obj {
   short_description: string
   sort_order: number
   is_active: boolean
+  is_global?: boolean
   has_pdf: boolean
+}
+
+// ---------- Точки продаж (филиалы) ----------
+
+export interface Point {
+  id: number
+  name: string
+  address: string
+  timezone: string
+  work_interval_begin: string
+  work_interval_end: string
+  is_active: boolean
+}
+
+export interface PointUpdateIn {
+  name?: string
+  address?: string
+  timezone?: string
+  work_interval_begin?: string
+  work_interval_end?: string
+  is_active?: boolean
 }
 
 // ---------- Поля заявки ----------

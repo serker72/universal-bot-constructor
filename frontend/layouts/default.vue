@@ -75,7 +75,8 @@ const auth = useAuth()
 const route = useRoute()
 
 const adminMenu = [
-  { to: '/dashboard', label: 'Дашборд', icon: 'dashboard' },
+  { to: '/dashboard', label: 'Панель управления', icon: 'dashboard' },
+  { to: '/points', label: 'Точки продаж', icon: 'point' },
   { to: '/categories', label: 'Категории', icon: 'folder' },
   { to: '/objects', label: 'Объекты', icon: 'cube' },
   { to: '/fields', label: 'Поля заявки', icon: 'clipboard' },
@@ -88,7 +89,7 @@ const adminMenu = [
 ]
 
 const managerMenu = [
-  { to: '/dashboard', label: 'Дашборд', icon: 'dashboard' },
+  { to: '/dashboard', label: 'Панель управления', icon: 'dashboard' },
   { to: '/categories', label: 'Категории', icon: 'folder' },
   { to: '/objects', label: 'Объекты', icon: 'cube' },
   { to: '/requests', label: 'Заявки', icon: 'clipboard' },

@@ -23,6 +23,14 @@
         </p>
       </div>
       <div>
+        <label class="label" for="st-bot-username">Имя бота в Telegram (username)</label>
+        <input id="st-bot-username" v-model="form.bot_username" class="input" maxlength="32" placeholder="my_bot" />
+        <p class="mt-1 text-xs text-gray-400">
+          Без «@». Используется для ссылок «выбрать филиал» на странице «Точки продаж»
+          (https://t.me/my_bot?start=point_1). Заполняется автоматически при старте бота.
+        </p>
+      </div>
+      <div>
         <label class="label" for="st-welcome">Текст приветствия бота (HTML)</label>
         <textarea id="st-welcome" v-model="form.welcome_text" class="input min-h-20"></textarea>
       </div>
@@ -58,12 +66,14 @@ const message = ref('')
 const form = ref({
   page_size: '10' as string | number,
   cancel_minutes: '1440' as string | number,
+  bot_username: '',
   welcome_text: '',
   consent_text: '',
 })
 
 const KEY_PAGE = 'bot.page_size'
 const KEY_CANCEL = 'requests.cancel_interval_minutes'
+const KEY_BOT_USERNAME = 'bot.username'
 const KEY_WELCOME = 'bot.welcome_text'
 const KEY_CONSENT = 'bot.consent_text'
 
@@ -71,6 +81,7 @@ function apply(settings: Record<string, string>) {
   form.value = {
     page_size: settings[KEY_PAGE] ?? '10',
     cancel_minutes: settings[KEY_CANCEL] ?? '1440',
+    bot_username: settings[KEY_BOT_USERNAME] ?? '',
     welcome_text: settings[KEY_WELCOME] ?? '',
     consent_text: settings[KEY_CONSENT] ?? '',
   }
@@ -87,6 +98,7 @@ async function save() {
         settings: {
           [KEY_PAGE]: String(form.value.page_size),
           [KEY_CANCEL]: String(form.value.cancel_minutes),
+          [KEY_BOT_USERNAME]: form.value.bot_username,
           [KEY_WELCOME]: form.value.welcome_text,
           [KEY_CONSENT]: form.value.consent_text,
         },

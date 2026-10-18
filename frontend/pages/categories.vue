@@ -10,6 +10,7 @@
         <thead>
           <tr>
             <th>Название</th>
+            <th class="w-32">Филиалы</th>
             <th class="w-24">Порядок</th>
             <th class="w-28">Активна</th>
             <th v-if="isAdmin" class="w-40">Действия</th>
@@ -18,6 +19,10 @@
         <tbody>
           <tr v-for="cat in items" :key="cat.id">
             <td class="font-medium">{{ cat.name }}</td>
+            <td>
+              <span v-if="cat.is_global" class="text-xs text-gray-400">🌍 Все филиалы</span>
+              <span v-else class="text-xs text-gray-500">📍 Локальная</span>
+            </td>
             <td>{{ cat.sort_order }}</td>
             <td>
               <UiBoolBadge :value="cat.is_active" />
@@ -30,7 +35,7 @@
             </td>
           </tr>
           <tr v-if="!items.length">
-            <td :colspan="isAdmin ? 4 : 3" class="py-6 text-center text-gray-400">Категорий пока нет</td>
+            <td :colspan="isAdmin ? 5 : 4" class="py-6 text-center text-gray-400">Категорий пока нет</td>
           </tr>
         </tbody>
       </table>

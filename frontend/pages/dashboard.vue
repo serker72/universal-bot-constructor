@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="mb-6">
-      <h1 class="page-title">Дашборд</h1>
+      <h1 class="page-title">Панель управления</h1>
       <p class="page-subtitle mt-1">
         Добро пожаловать, {{ auth.user.value?.username }}
       </p>
@@ -67,6 +67,7 @@ function openNewRequests() {
 const counts = ref({
   categories: null as number | null,
   objects: null as number | null,
+  points: null as number | null,
   requests: null as number | null,
   requestsNew: null as number | null,
 })
@@ -75,7 +76,7 @@ onMounted(async () => {
   // обе роли: backend отдаёт менеджеру только его объекты/категории/заявки
   const load = async (
     url: string,
-    key: 'categories' | 'objects' | 'requests' | 'requestsNew',
+    key: 'categories' | 'objects' | 'points' | 'requests' | 'requestsNew',
     params: Record<string, unknown> = {},
   ) => {
     try {
@@ -88,6 +89,7 @@ onMounted(async () => {
   await Promise.all([
     load('/categories', 'categories'),
     load('/objects', 'objects'),
+    load('/points', 'points'),
     load('/requests', 'requests'),
     // новые заявки — отдельным запросом с фильтром по статусу
     load('/requests', 'requestsNew', { status_filter: 'new' }),
@@ -97,6 +99,7 @@ onMounted(async () => {
 // менеджеру «Настройки» недоступны
 const cards = computed(() => {
   const all = [
+    { to: '/points', label: 'Точки продаж', icon: 'point', tint: 'bg-gradient-to-br from-emerald-400 to-emerald-600', count: counts.value.points },
     { to: '/categories', label: 'Категории', icon: 'folder', tint: 'bg-gradient-to-br from-sky-400 to-sky-600', count: counts.value.categories },
     { to: '/objects', label: 'Объекты', icon: 'cube', tint: 'bg-gradient-to-br from-violet-400 to-violet-600', count: counts.value.objects },
     { to: '/requests', label: 'Заявки', icon: 'clipboard', tint: 'bg-gradient-to-br from-amber-400 to-amber-600', count: counts.value.requests, countNew: counts.value.requestsNew },

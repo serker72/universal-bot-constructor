@@ -19,6 +19,7 @@
           <tr>
             <th>Название</th>
             <th>Категория</th>
+            <th class="w-32">Филиалы</th>
             <th class="w-24">Порядок</th>
             <th class="w-24">Активен</th>
             <th class="w-28">PDF</th>
@@ -29,6 +30,10 @@
           <tr v-for="obj in items" :key="obj.id">
             <td class="font-medium">{{ obj.name }}</td>
             <td>{{ categoryName(obj.category_id) }}</td>
+            <td>
+              <span v-if="obj.is_global" class="text-xs text-gray-400">🌍 Все филиалы</span>
+              <span v-else class="text-xs text-gray-500">📍 Локальный</span>
+            </td>
             <td>{{ obj.sort_order }}</td>
             <td>
               <UiBoolBadge :value="obj.is_active" />
@@ -47,7 +52,7 @@
             </td>
           </tr>
           <tr v-if="!items.length">
-            <td colspan="6" class="py-6 text-center text-gray-400">Объектов пока нет</td>
+            <td colspan="7" class="py-6 text-center text-gray-400">Объектов пока нет</td>
           </tr>
         </tbody>
       </table>

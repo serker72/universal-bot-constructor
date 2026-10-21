@@ -28,7 +28,7 @@ router = APIRouter(
     prefix="/request-fields", route_class=TransactionalRoute, tags=["request-fields"]
 )
 
-# Лимиты SELECT: Telegram показывает опции кнопками (текст кнопки — до 64
+# Лимиты SELECT/MULTISELECT: Telegram показывает опции кнопками (текст кнопки — до 64
 # символов), значение пишется в value_text
 MAX_SELECT_OPTIONS = 50
 MAX_OPTION_LENGTH = 64
@@ -53,16 +53,19 @@ def _is_int(value: object) -> bool:
 def _validate_meta_data(field_type: RequestFieldType, meta_data: dict | None) -> None:
     """Проверка параметров поля по типу (значения типизированы, пустые запрещены).
 
-    - SELECT — options: непустой список непустых строк ≤ MAX_OPTION_LENGTH;
+    - SELECT/MULTISELECT — options: непустой список непустых строк ≤ MAX_OPTION_LENGTH;
+    - BOOLEAN — true_label/false_label: непустые строки;
     - TIME — minute_step: целое, делитель 60 (1..30);
     - NUMBER — min/max: числа, min ≤ max;
     - TEXT — max_length: целое 1..VALUE_TEXT_MAX_LENGTH (длина колонки value_text).
     """
     if meta_data is None:
-        if field_type == RequestFieldType.SELECT:
-            raise _bad_request("SELECT-поле требует meta_data с непустым списком options")
+        if field_type in (RequestFieldType.SELECT, RequestFieldType.MULTISELECT):
+            raise _bad_request("SELECT/MULTISELECT-поле требует meta_data с непустым списком options")
+        if field_type == RequestFieldType.BOOLEAN:
+            raise _bad_request("BOOLEAN-поле требует meta_data с true_label и false_label")
         return
-    if field_type == RequestFieldType.SELECT:
+    if field_type in (RequestFieldType.SELECT, RequestFieldType.MULTISELECT):
         options = meta_data.get("options")
         if (
             not isinstance(options, list)
@@ -78,6 +81,17 @@ def _validate_meta_data(field_type: RequestFieldType, meta_data: dict | None) ->
             )
         if len({o.strip() for o in options}) != len(options):
             raise _bad_request("meta_data.options — варианты не должны повторяться")
+    if field_type == RequestFieldType.BOOLEAN:
+        true_label = meta_data.get("true_label")
+        false_label = meta_data.get("false_label")
+        if (
+            not true_label or not isinstance(true_label, str) or not true_label.strip()
+        ):
+            raise _bad_request("meta_data.true_label — непустая строка")
+        if (
+            not false_label or not isinstance(false_label, str) or not false_label.strip()
+        ):
+            raise _bad_request("meta_data.false_label — непустая строка")
     if field_type == RequestFieldType.TIME:
         step = meta_data.get("minute_step", MINUTES_STEP)
         if not _is_int(step) or not (1 <= step <= 30) or 60 % step != 0:

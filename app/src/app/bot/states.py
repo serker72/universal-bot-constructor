@@ -42,5 +42,7 @@ class DynamicRequestSG(StatesGroup):
     input_time_hour = State()
     input_time_minute = State()
     input_select = State()
+    input_multiselect = State()
+    input_boolean = State()
     summary = State()
 

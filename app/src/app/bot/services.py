@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.models import Category, Object, Point, Request, RequestStatus, Visitor
+from app.domain.models import Category, Object, Point, Request, RequestFieldType, RequestStatus, Visitor
 from app.domain.models.request_field_value import VALUE_TEXT_MAX_LENGTH
 from app.repository.category import CategoryRepository
 from app.repository.object import ObjectRepository
@@ -292,12 +292,33 @@ class BotService:
         """Значения полей заявки (label, value) — для карточки «Мои заявки».
 
         Один путь чтения значений — RequestRepository.get_with_values.
+        BOOLEAN и MULTISELECT форматируются для отображения.
         """
+        import json
+
         req = await self.requests.get_with_values(request_id)
         if req is None:
             return []
         values = sorted(req.values, key=lambda v: v.field_id)
-        return [(v.field.label, v.value_text) for v in values]
+        result: list[tuple[str, str | None]] = []
+        for v in values:
+            value = v.value_text
+            # BOOLEAN: "true"/"false" → подпись из meta_data
+            if value and v.field.type == RequestFieldType.BOOLEAN:
+                meta = v.field.meta_data or {}
+                tl = str(meta.get("true_label", "Да"))
+                fl = str(meta.get("false_label", "Нет"))
+                value = tl if value == "true" else fl
+            # MULTISELECT: JSON-массив → "A, B, C"
+            if value and v.field.type == RequestFieldType.MULTISELECT:
+                try:
+                    arr = json.loads(value)
+                    if isinstance(arr, list):
+                        value = ", ".join(str(x) for x in arr)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            result.append((v.field.label, value))
+        return result
 
     async def create_request(
         self,

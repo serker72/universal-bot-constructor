@@ -19,6 +19,8 @@ class RequestFieldType(str, enum.Enum):
     DATE = "date"
     TIME = "time"       # выбор часа и минут (два окна)
     SELECT = "select"
+    MULTISELECT = "multiselect"  # множественный выбор из вариантов
+    BOOLEAN = "boolean"    # переключатель Да/Нет
 
 
 class RequestAvailableField(Base, TimestampMixin):

@@ -36,15 +36,19 @@ from aiogram_dialog.widgets.input import MessageInput
 from aiogram_dialog.widgets.kbd import (
     Button,
     CalendarConfig,
+    Checkbox,
     ManagedCalendar,
+    Multiselect,
     ScrollingGroup,
     Select,
 )
 from aiogram_dialog.widgets.text import Const, Format
 
 from app.bot.dialogs.getters import (
+    boolean_labels_getter,
     current_field,
     current_step,
+    field_boolean_labels,
     field_getter,
     field_minute_step,
     field_options,
@@ -52,6 +56,7 @@ from app.bot.dialogs.getters import (
     hours_getter,
     manager_start_answers,
     minutes_getter,
+    multiselect_options_getter,
     normalize_answers,
     profile_getter,
     schema_of,
@@ -87,6 +92,8 @@ _STATE_BY_TYPE = {
     RequestFieldType.DATE.value: DynamicRequestSG.input_date,
     RequestFieldType.TIME.value: DynamicRequestSG.input_time_hour,
     RequestFieldType.SELECT.value: DynamicRequestSG.input_select,
+    RequestFieldType.MULTISELECT.value: DynamicRequestSG.input_multiselect,
+    RequestFieldType.BOOLEAN.value: DynamicRequestSG.input_boolean,
 }
 
 
@@ -488,6 +495,63 @@ async def on_option_selected(
 
 
 # ---------------------------------------------------------------------------
+# Поля MULTISELECT (Multiselect + кнопка «Готово»)
+# ---------------------------------------------------------------------------
+
+
+async def on_multiselect_state_changed(
+    callback: CallbackQuery, widget: "ManagedMultiselect", manager: DialogManager,
+) -> None:
+    """Обработка изменений в Multiselect (не вызывает переход)."""
+    await callback.answer()
+
+
+async def on_multiselect_confirm(
+    callback: CallbackQuery, button: Button, manager: DialogManager,
+) -> None:
+    """Кнопка «Готово» для MULTISELECT — зафиксировать выбор и перейти дальше."""
+    field = current_field(manager)
+    if not _field_is_type(field, RequestFieldType.MULTISELECT):
+        await callback.answer("Недопустимый шаг", show_alert=True)
+        return
+    # widget data хранится в dialog_data под id виджета ("ms_field")
+    # Multiselect хранит список item_id выбранных элементов
+    raw = manager.dialog_data.get("widget__ms_field", [])
+    if isinstance(raw, dict):
+        checked = raw.get("checked", [])
+    else:
+        checked = raw if isinstance(raw, list) else []
+    options = field_options(field)
+    if field and field["is_required"] and not checked:
+        await callback.answer(
+            f"Поле «{field['label']}» обязательно. Выберите вариант:",
+            show_alert=True,
+        )
+        return
+    # сериализуем выбранные опции в JSON
+    import json
+    values = [options[int(idx)] for idx in checked if str(idx).isdigit() and int(idx) < len(options)]
+    await process_and_go_next(manager, json.dumps(values, ensure_ascii=False))
+
+
+# ---------------------------------------------------------------------------
+# Поля BOOLEAN (Checkbox)
+# ---------------------------------------------------------------------------
+
+
+async def on_boolean_toggle(
+    callback: CallbackQuery, checkbox: "ManagedCheckbox", manager: DialogManager,
+) -> None:
+    """Переключение Checkbox — сразу записываем и переходим дальше."""
+    field = current_field(manager)
+    if not _field_is_type(field, RequestFieldType.BOOLEAN):
+        await callback.answer("Недопустимый шаг", show_alert=True)
+        return
+    checked = checkbox.is_checked()
+    await process_and_go_next(manager, "true" if checked else "false")
+
+
+# ---------------------------------------------------------------------------
 # Summary и финализация
 # ---------------------------------------------------------------------------
 
@@ -591,6 +655,35 @@ _OPTIONS_ROW = ScrollingGroup(
     id="sg_options",
     width=1,
     height=8,
+)
+
+# MULTISELECT: Multiselect с checked/unchecked стилями
+_MSCHECKED = Format("✅ {item[0]}")
+_MSUNCHECKED = Format("⬜ {item[0]}")
+
+_MS_MULTISELECT = Multiselect(
+    checked_text=_MSCHECKED,
+    unchecked_text=_MSUNCHECKED,
+    id="ms_field",
+    item_id_getter=lambda item: item[1],
+    items="ms_options",
+    type_factory=str,
+    on_click=on_multiselect_state_changed,
+)
+
+# Кнопка «Готово» для MULTISELECT
+_MS_CONFIRM = Button(
+    Const("✅ Готово"),
+    id="btn_ms_confirm",
+    on_click=on_multiselect_confirm,
+)
+
+# BOOLEAN: Checkbox с кастомными подписями
+_BOOL_CHECKBOX = Checkbox(
+    id="chk_bool",
+    checked_text=Format("{true_label}"),
+    unchecked_text=Format("{false_label}"),
+    on_click=on_boolean_toggle,
 )
 
 _SKIP_BUTTON = Button(
@@ -701,6 +794,34 @@ dialog = Dialog(
         _BACK_BUTTON,
         getter=[field_getter, select_options_getter],
         state=DynamicRequestSG.input_select,
+        parse_mode=WINDOW_PARSE_MODE,
+    ),
+    # -- Окно MULTISELECT-поля (Multiselect + кнопка «Готово») ---------------------
+    Window(
+        Format("{field_label}\nОтметьте варианты и нажмите «Готово»:"),
+        ScrollingGroup(
+            _MS_MULTISELECT,
+            id="sg_ms_options",
+            width=1,
+            height=8,
+        ),
+        _MS_CONFIRM,
+        _SKIP_INPUT,
+        _SKIP_BUTTON,
+        _BACK_BUTTON,
+        getter=[field_getter, multiselect_options_getter],
+        state=DynamicRequestSG.input_multiselect,
+        parse_mode=WINDOW_PARSE_MODE,
+    ),
+    # -- Окно BOOLEAN-поля (Checkbox) -----------------------------------------------
+    Window(
+        Format("{field_label}\n{true_label} / {false_label}:"),
+        _BOOL_CHECKBOX,
+        _SKIP_INPUT,
+        _SKIP_BUTTON,
+        _BACK_BUTTON,
+        getter=[field_getter, boolean_labels_getter],
+        state=DynamicRequestSG.input_boolean,
         parse_mode=WINDOW_PARSE_MODE,
     ),
     # -- Summary -------------------------------------------------------------------

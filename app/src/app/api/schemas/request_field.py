@@ -89,4 +89,5 @@ class RequestFieldValueOut(BaseModel):
     field_id: int
     field_code: str
     field_label: str
+    field_type: RequestFieldType
     value: str | None

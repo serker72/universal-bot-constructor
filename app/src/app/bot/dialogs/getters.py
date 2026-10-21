@@ -113,10 +113,21 @@ def current_field(manager: DialogManager) -> dict | None:
 
 
 def field_options(field: dict | None) -> list[str]:
-    """Опции SELECT-поля из meta_data."""
+    """Опции SELECT/MULTISELECT-поля из meta_data."""
     if field is None:
         return []
     return [str(o) for o in (field.get("meta_data") or {}).get("options", [])]
+
+
+def field_boolean_labels(field: dict | None) -> tuple[str, str]:
+    """Подписи true/false для BOOLEAN-поля из meta_data."""
+    if field is None:
+        return "Да", "Нет"
+    meta = field.get("meta_data") or {}
+    return (
+        str(meta.get("true_label", "Да")),
+        str(meta.get("false_label", "Нет")),
+    )
 
 
 def field_minute_step(field: dict | None) -> int:
@@ -191,12 +202,32 @@ async def select_options_getter(dialog_manager: DialogManager, **kwargs) -> dict
     return {"options": [(text, str(index)) for index, text in enumerate(options)]}
 
 
+async def multiselect_options_getter(dialog_manager: DialogManager, **kwargs) -> dict:
+    """Опции MULTISELECT-поля: (текст, индекс).
+
+    Multiselect хранит выбранные item_id как список строк в widget_data.
+    """
+    options = field_options(current_field(dialog_manager))
+    return {"ms_options": [(text, str(index)) for index, text in enumerate(options)]}
+
+
+async def boolean_labels_getter(dialog_manager: DialogManager, **kwargs) -> dict:
+    """Подписи для BOOLEAN-поля: true_label, false_label."""
+    field = current_field(dialog_manager)
+    tl, fl = field_boolean_labels(field)
+    return {"true_label": tl, "false_label": fl}
+
+
 async def summary_getter(dialog_manager: DialogManager, **kwargs) -> dict:
     """Сводка: список «label: value» по всем полям схемы + телефон.
 
     Значения TIME-полей помечаются смещением таймзоны филиала
     (время хранится как введено — в местном времени точки).
+    BOOLEAN — отображается с кастомной подписью из meta_data.
+    MULTISELECT — JSON-массив опций отображается как «A, B, C».
     """
+    import json
+
     schema = schema_of(dialog_manager)
     answers: dict[int, str | None] = manager_start_answers(dialog_manager)
     point = point_of(dialog_manager)
@@ -208,6 +239,20 @@ async def summary_getter(dialog_manager: DialogManager, **kwargs) -> dict:
         value = answers.get(f["id"])
         if value and offset and f["type"] == RequestFieldType.TIME.value:
             value = f"{value} ({offset})"
+        # BOOLEAN: "true"/"false" → подпись из meta_data
+        if value and f["type"] == RequestFieldType.BOOLEAN.value:
+            meta = f.get("meta_data") or {}
+            tl = str(meta.get("true_label", "Да"))
+            fl = str(meta.get("false_label", "Нет"))
+            value = tl if value == "true" else fl
+        # MULTISELECT: JSON-массив → "A, B, C"
+        if value and f["type"] == RequestFieldType.MULTISELECT.value:
+            try:
+                arr = json.loads(value)
+                if isinstance(arr, list):
+                    value = ", ".join(str(x) for x in arr)
+            except (json.JSONDecodeError, TypeError):
+                pass
         lines.append(f"• {f['label']}: {value if value else '—'}")
     phone = dialog_manager.dialog_data.get("phone", "")
     # хвостовые переводы строки — чтобы без точки в окне не было пустого блока

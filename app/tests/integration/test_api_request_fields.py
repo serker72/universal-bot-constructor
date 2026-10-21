@@ -47,6 +47,76 @@ async def test_select_requires_options_400(admin_client):
     assert resp.status_code == 400
 
 
+async def test_multiselect_requires_options_400(admin_client):
+    """MULTISELECT-поле без options — 400."""
+    resp = await admin_client.post(
+        f"{API}/request-fields",
+        json={"code": "bad_multiselect", "type": "multiselect", "label": "Выбор"},
+    )
+    assert resp.status_code == 400
+
+
+async def test_create_multiselect_field(admin_client):
+    """Корректное создание MULTISELECT-поля."""
+    resp = await admin_client.post(
+        f"{API}/request-fields",
+        json={
+            "code": "tags",
+            "type": "multiselect",
+            "label": "Теги",
+            "meta_data": {"options": ["Важно", "Срочно", "Обычно"]},
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["type"] == "multiselect"
+    assert body["meta_data"]["options"] == ["Важно", "Срочно", "Обычно"]
+
+    resp = await admin_client.get(f"{API}/request-fields/{body['id']}")
+    assert resp.status_code == 200
+    assert resp.json()["type"] == "multiselect"
+
+
+async def test_boolean_requires_labels_400(admin_client):
+    """BOOLEAN-поле без true_label/false_label — 400."""
+    resp = await admin_client.post(
+        f"{API}/request-fields",
+        json={"code": "bad_bool", "type": "boolean", "label": "Галочка"},
+    )
+    assert resp.status_code == 400
+
+    resp = await admin_client.post(
+        f"{API}/request-fields",
+        json={
+            "code": "bad_bool2", "type": "boolean", "label": "Галочка",
+            "meta_data": {"true_label": "Да"},
+        },
+    )
+    assert resp.status_code == 400
+
+
+async def test_create_boolean_field(admin_client):
+    """Корректное создание BOOLEAN-поля."""
+    resp = await admin_client.post(
+        f"{API}/request-fields",
+        json={
+            "code": "is_vip",
+            "type": "boolean",
+            "label": "VIP клиент",
+            "meta_data": {"true_label": "Да, VIP", "false_label": "Нет, обычный"},
+        },
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["type"] == "boolean"
+    assert body["meta_data"]["true_label"] == "Да, VIP"
+    assert body["meta_data"]["false_label"] == "Нет, обычный"
+
+    resp = await admin_client.get(f"{API}/request-fields/{body['id']}")
+    assert resp.status_code == 200
+    assert resp.json()["type"] == "boolean"
+
+
 async def test_time_minute_step_validation_400(admin_client):
     """TIME-поле с некорректным шагом минут — 400."""
     resp = await admin_client.post(
@@ -194,6 +264,11 @@ async def test_delete_field_linked_to_category(admin_client, category_with_field
         ("text", {"max_length": 5000}),
         ("time", {"minute_step": True}),
         ("select", {"options": ["x" * 65]}),
+        ("multiselect", {"options": ["x" * 65]}),
+        ("multiselect", {"options": []}),
+        ("boolean", {"true_label": ""}),
+        ("boolean", {"true_label": "Да"}),
+        ("boolean", {"false_label": "Нет"}),
     ],
 )
 async def test_meta_data_types_validated_400(admin_client, field_type, meta):

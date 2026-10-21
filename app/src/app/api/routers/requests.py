@@ -34,6 +34,7 @@ def _to_out(req: Request) -> RequestOut:
             field_id=v.field_id,
             field_code=v.field.code,
             field_label=v.field.label,
+            field_type=v.field.type,
             value=v.value_text,
         )
         for v in req.values

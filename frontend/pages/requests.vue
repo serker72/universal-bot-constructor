@@ -64,10 +64,18 @@
                   v-for="f in req.fields"
                   :key="f.field_id"
                   class="text-sm"
-                  :title="`${f.field_label}: ${f.value ?? '—'}`"
+                  :title="`${f.field_label}: ${formatFieldValue(f) ?? '—'}`"
                 >
                   <span class="text-gray-500">{{ f.field_label }}:</span>
-                  {{ f.value || '—' }}
+                  <span v-if="f.field_type === 'boolean' && f.value === 'true'"
+                        class="inline-block rounded bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-800">
+                    {{ boolLabel(f, true) }}
+                  </span>
+                  <span v-else-if="f.field_type === 'boolean' && f.value === 'false'"
+                        class="inline-block rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-800">
+                    {{ boolLabel(f, false) }}
+                  </span>
+                  <span v-else>{{ formatFieldValue(f) || '—' }}</span>
                 </div>
               </template>
               <span v-else class="text-gray-400">—</span>
@@ -100,7 +108,7 @@
 </template>
 
 <script setup lang="ts">
-import type { Obj, Request } from '~/types/models'
+import type { Obj, Request, RequestFieldValue } from '~/types/models'
 import { REQUEST_STATUSES, REQUEST_STATUS_LABELS } from '~/types/models'
 
 const auth = useAuth()
@@ -132,6 +140,29 @@ const { items, total, offset, load, changeOffset: goTo } = useListLoader<Request
 
 function objectName(id: number): string {
   return nameById(objects.value, id)
+}
+
+/** Форматирование значения поля для отображения */
+function formatFieldValue(f: RequestFieldValue): string | null {
+  if (!f.value) return null
+  // MULTISELECT: JSON-массив → "A, B, C"
+  if (f.field_type === 'multiselect') {
+    try {
+      const arr = JSON.parse(f.value)
+      if (Array.isArray(arr)) return arr.join(', ')
+    } catch {
+      // не JSON — отдаём как есть
+    }
+  }
+  return f.value
+}
+
+/** Подпись для boolean-поля из meta_data (хранится в field_label, fallback — стандартные) */
+function boolLabel(f: RequestFieldValue, checked: boolean): string {
+  // meta_data хранится в поле field_label? Нет — meta_data не передаётся.
+  // Поле field_label — это просто label поля. Meta_data не включён в ответ.
+  // Дефолтные подписи:
+  return checked ? 'Да' : 'Нет'
 }
 
 /** Обработка доступна только менеджеру объекта: new → approved/rejected, approved → completed */

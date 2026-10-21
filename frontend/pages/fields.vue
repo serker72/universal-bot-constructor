@@ -93,6 +93,17 @@
           <label class="label" for="fld-maxlen">Максимальная длина</label>
           <input id="fld-maxlen" v-model.number="maxLength" class="input" type="number" min="1" max="1000" />
         </div>
+        <div v-else-if="form.type === 'multiselect'" class="space-y-2">
+          <label class="label" for="fld-multiselect-options">Варианты (по одному в строке)</label>
+          <textarea id="fld-multiselect-options" v-model="optionsText" class="input min-h-24"
+                    placeholder="Вариант 1&#10;Вариант 2" />
+        </div>
+        <div v-else-if="form.type === 'boolean'" class="space-y-2">
+          <label class="label" for="fld-true-label">Подпись «Да»</label>
+          <input id="fld-true-label" v-model="boolTrueLabel" class="input" maxlength="64" />
+          <label class="label" for="fld-false-label">Подпись «Нет»</label>
+          <input id="fld-false-label" v-model="boolFalseLabel" class="input" maxlength="64" />
+        </div>
 
         <p v-if="formError" class="text-sm text-red-600">{{ formError }}</p>
         <div class="flex justify-end gap-2">
@@ -130,6 +141,8 @@ const minuteStep = ref<number | ''>(5)
 const numMin = ref<number | '' | null>(null)
 const numMax = ref<number | '' | null>(null)
 const maxLength = ref<number | ''>(1000)
+const boolTrueLabel = ref('Да')
+const boolFalseLabel = ref('Нет')
 
 function metaText(f: FieldDef): string {
   if (!f.meta_data) return '—'
@@ -143,11 +156,17 @@ function applyMeta(f: FieldDef | null) {
   numMin.value = typeof meta.min === 'number' ? meta.min : null
   numMax.value = typeof meta.max === 'number' ? meta.max : null
   maxLength.value = typeof meta.max_length === 'number' ? meta.max_length : 1000
+  boolTrueLabel.value = typeof meta.true_label === 'string' ? meta.true_label : 'Да'
+  boolFalseLabel.value = typeof meta.false_label === 'string' ? meta.false_label : 'Нет'
 }
 
 function buildMeta(): Record<string, unknown> | null {
   const meta: Record<string, unknown> = {}
   if (form.value.type === 'select') {
+    const options = optionsText.value.split('\n').map((s) => s.trim()).filter(Boolean)
+    if (!options.length) return null
+    meta.options = options
+  } else if (form.value.type === 'multiselect') {
     const options = optionsText.value.split('\n').map((s) => s.trim()).filter(Boolean)
     if (!options.length) return null
     meta.options = options
@@ -158,6 +177,12 @@ function buildMeta(): Record<string, unknown> | null {
     if (isNumber(numMax.value)) meta.max = numMax.value
   } else if (form.value.type === 'text') {
     if (isNumber(maxLength.value)) meta.max_length = maxLength.value
+  } else if (form.value.type === 'boolean') {
+    const tl = boolTrueLabel.value.trim()
+    const fl = boolFalseLabel.value.trim()
+    if (tl) meta.true_label = tl
+    if (fl) meta.false_label = fl
+    if (!tl && !fl) return null
   }
   return Object.keys(meta).length ? meta : null
 }
@@ -216,6 +241,11 @@ async function save() {
   formError.value = ''
   const meta = buildMeta()
   if (form.value.type === 'select' && !meta) {
+    formError.value = 'Укажите хотя бы один вариант'
+    saving.value = false
+    return
+  }
+  if (form.value.type === 'multiselect' && !meta) {
     formError.value = 'Укажите хотя бы один вариант'
     saving.value = false
     return

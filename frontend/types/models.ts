@@ -73,7 +73,7 @@ export interface PointUpdateIn {
 
 // ---------- Поля заявки ----------
 
-export type FieldType = 'text' | 'number' | 'date' | 'time' | 'select'
+export type FieldType = 'text' | 'number' | 'date' | 'time' | 'select' | 'multiselect' | 'boolean'
 
 export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
   text: 'Текст',
@@ -81,6 +81,8 @@ export const FIELD_TYPE_LABELS: Record<FieldType, string> = {
   date: 'Дата',
   time: 'Время (часы и минуты)',
   select: 'Выбор из вариантов',
+  multiselect: 'Множественный выбор',
+  boolean: 'Галочка',
 }
 
 /** Справочник поля (request_available_fields) */
@@ -98,6 +100,7 @@ export interface RequestFieldValue {
   field_id: number
   field_code: string
   field_label: string
+  field_type: FieldType
   value: string | null
 }
 

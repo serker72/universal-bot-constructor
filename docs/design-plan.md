@@ -1549,6 +1549,109 @@ Unit (`app/tests/unit/`):
    unit + интеграционные для пунктов 1–3 и 7 выполнены (183 unit + 190
    интеграционных); тесты таймзоны/графика — вместе с пунктом 4.
 
+## Добавление типов поля «MULTISELECT» и «BOOLEAN»
+
+> **Статус: выполнено (21.10.2026).** Миграция `f81df234f832` применена к
+> основной и тестовой БД; тесты: 217 unit + 199 интеграционных passed
+> (9 новых — CRUD и валидация meta_data MULTISELECT/BOOLEAN); образы
+> `ubc-app` / `ubc-app-test` / `ubc-frontend` пересобраны, контейнеры
+> пересозданы, nginx healthy.
+
+### 1. Изменения в базе данных и бэкенде
+
+**Статус: выполнено (21.10.2026).**
+
+* **Справочник типов полей (`RequestFieldType`):** Добавить новые значения
+  `multiselect` и `boolean` в перечисление
+  `app/src/app/domain/models/request_field.py` (после `SELECT = "select"`):
+  `MULTISELECT = "multiselect"`, `BOOLEAN = "boolean"`.
+  — *выполнено: enum + миграция `f81df234f832`
+  (`ALTER TYPE tp_request_field_type ADD VALUE IF NOT EXISTS`).*
+* **Хранение значений:** Обеспечить сохранение выбранных пользователем опций
+  в таблице `request_fields` аналогично типу `SELECT` — `value_text`
+  (String(1024)):
+  - `multiselect` — сериализованный массив (JSON
+    `["Вариант 1","Вариант 3"]`);
+  - `boolean` — строковое представление булева значения (`"true"` / `"false"`;
+    при чтении парсить `str.lower() == "true"`).
+* **`meta_data`:**
+  - для `multiselect` — `{"options": ["Вариант 1", ...]}`, аналогично `SELECT`;
+  - для `boolean` — `{"true_label": "Да", "false_label": "Нет"}`
+    (кастомные подписи; дефолт — `{"true_label": "Да", "false_label": "Нет"}`).
+* **Валидация:** при финализации заявки проверить, что выбрано хотя бы
+  одно значение (для `multiselect` и `boolean` — обязательное поле всегда
+  требует ответа); значение не пустое.
+
+### 2. Веб-панель (Административная часть)
+
+**Статус: выполнено (21.10.2026).** Реализовано: `frontend/types/models.ts`
+добавлены `'multiselect'` и `'boolean'` в `FieldType` и `FIELD_TYPE_LABELS`;
+`frontend/pages/fields.vue` — форма для `multiselect` (textarea вариантов,
+как у `select`) и `boolean` (`true_label`/`false_label`, дефолт «Да»/«Нет»);
+в `buildMeta()` обработка обоих типов; валидация на клиенте (не пустой
+список опций). Отображение: в `/requests` `RequestFieldValueOut.field_type`
+передаётся в frontend — BOOLEAN рендерится как цветной бейдж (`green`/`red`),
+MULTISELECT — JSON-массив как «A, B, C» через `formatFieldValue()`.
+
+* **Дублирование интерфейса списочных полей:** Реализовать логику добавления
+  и редактирования полей типа `MULTISELECT` в `/fields`, аналогичную текущему
+  типу `SELECT` (управление списком вариантов строками в `meta_data`).
+* **Конфигурация типа BOOLEAN:** добавить в форму создания/редактирования поля
+  (`/fields`) секцию «Настройки для типа BOOLEAN»: два текстовых поля
+  «Значение "Да"» (`true_label`) и «Значение "Нет"» (`false_label`)
+  с дефолтом `Да` / `Нет`; в списке справочника полей — бейдж «Галочка»
+  для типа `boolean`.
+* **Отметка «множественный выбор»:** при отображении справочника полей
+  (`/fields`) показывать бейдж «Множественный» / «Одиночный» для `select`
+  vs `multiselect`.
+* **Отображение значений в `/requests`:** показывать выбранные опции как
+  чекбокс-список (или теги) в карточке заявки, аналогично `SELECT`;
+  для `boolean` — бейдж «Да»/«Нет» (цветовой: зелёный/красный) с
+  кастомной подписью из `meta_data`.
+
+### 3. Telegram-бот (`aiogram-dialog`)
+
+**Статус: выполнено (21.10.2026).** Реализовано: `DynamicRequestSG` —
+`input_multiselect` + `input_boolean`; `_STATE_BY_TYPE` маппинг новых типов;
+импортированы `Multiselect`, `Checkbox` из `aiogram_dialog.widgets.kbd`;
+`on_multiselect_state_changed` (no-op, просто ответ), `on_multiselect_confirm`
+(считывает `widget__ms_field` из `dialog_data`, JSON-сериализация выбранных
+опций, валидация `is_required`); `on_boolean_toggle` (записывает `"true"`/`"false"`,
+переходит дальше); окна в `Dialog` — `ScrollingGroup(Multiselect, _MS_CONFIRM)`
+и `Checkbox` с `boolean_labels_getter` (true_label/false_label из meta_data);
+`summary_getter` — BOOLEAN с кастомной подписью, MULTISELECT как «A, B, C»;
+`BotService.get_request_values` — форматирование для карточки «Мои заявки»;
+геттеры `multiselect_options_getter`, `boolean_labels_getter`.
+
+* **Интеграция виджета `Multiselect`:** Настроить отображение вариантов поля
+  множественного выбора с помощью виджета `Multiselect` из `aiogram-dialog`
+  (`aiogram_dialog.widgets.kbd.Multiselect`), позволяющего пользователю
+  отмечать несколько пунктов на одном экране.
+  `Multiselect` — подкласс `StatefulSelect`, использует `meta_data["options"]`
+  как `items` (label-value пары).
+* **Кнопка подтверждения для `MULTISELECT`:** Добавить обязательную кнопку
+  подтверждения выбора («Готово» / «Продолжить»), после нажатия которой
+  собранный массив значений фиксируется в сессии (FSM) и сохраняется в
+  базу данных.
+  — состояние `input_multiselect` в `DynamicRequestSG`;
+  — `process_and_go_next` записывает список выбранных значений в
+    `dialog_data["answers"][field_id]` (JSON-строка);
+  — кнопка «Пропустить» доступна только если `is_required=False`
+    (как для `SELECT`).
+* **Виджет `Select` с кнопкой подтверждения:** Для типа `SELECT` (и `multiselect`)
+  использовать виджет `Select` в паре с кнопкой подтверждения выбора
+  («Готово» / «Продолжить»), чтобы пользователь мог перепроверить выбор
+  перед отправкой. Кнопка вызывает финализацию шага и запись значения.
+* **Интеграция виджета `Checkbox`:** Для типа `BOOLEAN` использовать виджет
+  `Checkbox` из `aiogram-dialog` (`aiogram_dialog.widgets.kbd.Checkbox`),
+  позволяющий переключать логическое состояние (галочка).
+  — состояние `input_boolean` в `DynamicRequestSG`;
+  — `Checkbox` использует `meta_data["true_label"]` / `meta_data["false_label"]`
+    для подписи (дефолт — «Да» / «Нет»);
+  — при смене состояния (`on_click`) значение сразу записывается в
+    `dialog_data["answers"][field_id]` (`"true"` / `"false"`);
+  — кнопка «Пропустить» доступна только если `is_required=False`.
+
 ---
 
 ## Как использовать этот файл в новой сессии
